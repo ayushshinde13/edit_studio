@@ -108,63 +108,88 @@ flowchart LR
 - **Node.js** 18.18.0 or later
 - **npm**, **pnpm**, or **yarn**
 
-### Installation
+### Installation & Setup
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/edit_studio.git
+   git clone https://github.com/ayushshinde13/edit_studio.git
    cd edit_studio
    ```
 
-2. **Install dependencies:**
+2. **Frontend Setup (Next.js 16 Client App):**
    ```bash
+   cd frontend
    npm install
-   ```
-
-3. **Start the local development server:**
-   ```bash
    npm run dev
    ```
+   *Frontend opens at [http://localhost:3000](http://localhost:3000).*
 
-4. **Open in browser:**
-   Navigate to [http://localhost:3000](http://localhost:3000).
+3. **Backend Setup (Express.js Service):**
+   ```bash
+   cd backend
+   npm install
+   npm run dev
+   ```
+   *Backend API runs at [http://localhost:5000](http://localhost:5000).*
+
+4. **Or run directly from root:**
+   ```bash
+   npm run dev          # Start frontend
+   npm run server:dev   # Start backend
+   ```
 
 ---
 
-## 📁 Project Directory Structure
+## 📁 Project Directory Structure (Decoupled Monorepo)
 
 ```text
 edit_studio/
-├── public/                 # Static assets, icons, and SVG illustrations
-├── src/
-│   ├── app/                # Next.js App Router (57+ routes)
-│   │   ├── (app)/          # Main dashboard & home landing
-│   │   ├── audio/          # Audio Hub tool routes (cutter, converter, etc.)
-│   │   ├── creative/       # Creative Studio tool routes (video, watermark, etc.)
-│   │   ├── stems/          # Stem Separation Studio
-│   │   └── admin/          # Admin telemetry and local log dashboard
-│   ├── components/         # Shared UI components and modals
-│   ├── config/             # Tools catalog, navigation definitions, and SEO data
-│   ├── design-system/      # Atomic UI primitives, buttons, sliders, cards
-│   ├── features/           # Feature-specific modules (stems, audio toolbox)
-│   └── lib/                # Core processing engines
-│       ├── audio/          # Web Audio DSP, encoding, and conversion
-│       ├── image/          # Canvas inpainting, filters, and resizing
-│       ├── video/          # Real-time frame delogo inpainting & texture healing
-│       └── utils.ts        # Formatting and helper utilities
-├── package.json            # Dependencies and scripts
-├── tsconfig.json           # TypeScript configuration
-└── README.md               # Project documentation
+├── frontend/               # Next.js 16 + React 19 Client Web Application
+│   ├── public/             # Static assets, icons, and SVG illustrations
+│   ├── src/
+│   │   ├── app/            # Next.js App Router (57+ routes)
+│   │   │   ├── (app)/      # Main dashboard & home landing
+│   │   │   ├── audio/      # Audio Hub tool routes (cutter, converter, etc.)
+│   │   │   ├── creative/   # Creative Studio tool routes (video, watermark, etc.)
+│   │   │   ├── stems/      # Stem Separation Studio
+│   │   │   └── admin/      # Admin telemetry and local log dashboard
+│   │   ├── components/     # Shared UI components and modals
+│   │   ├── config/         # Tools catalog, navigation definitions, and SEO data
+│   │   ├── design-system/  # Atomic UI primitives, buttons, sliders, cards
+│   │   ├── features/       # Feature-specific modules (stems, audio toolbox)
+│   │   └── lib/            # Core processing engines (audio, image, videoWatermark)
+│   ├── next.config.ts      # Next.js configuration
+│   ├── tsconfig.json       # TypeScript configuration
+│   ├── eslint.config.mjs   # ESLint rules
+│   └── package.json        # Frontend dependencies & scripts
+│
+├── backend/                # Express.js Decoupled API Service
+│   ├── src/
+│   │   ├── config/         # Environment & database config
+│   │   ├── controllers/    # API controllers (auth, events, feedback, projects)
+│   │   ├── middleware/     # Rate limiting, anonymization, and JWT auth guards
+│   │   ├── models/         # Mongoose & in-memory data models
+│   │   └── routes/         # Express API route endpoints
+│   ├── server.js           # Server entry point (Port 5000)
+│   ├── test.js             # Automated API test suite
+│   └── package.json        # Backend dependencies & scripts
+│
+├── supabase/               # Supabase database migrations & schemas
+├── scripts/                # Build and PDF generation helper scripts
+├── .github/workflows/      # Automated CI & Supabase keepalive workflows
+├── package.json            # Root workspace orchestrator
+├── .gitignore              # Monorepo ignore rules
+└── README.md               # Root documentation
 ```
 
 ---
 
 ## 📜 Available Scripts
 
-- `npm run dev` - Starts the development server with Turbopack.
-- `npm run build` - Generates an optimized production build.
-- `npm run start` - Serves the production build.
-- `npm run lint` - Runs ESLint code style and quality checks.
+- **`npm run dev`** - Starts the Next.js frontend app (`http://localhost:3000`).
+- **`npm run build`** - Builds the optimized production frontend bundle.
+- **`npm run server:dev`** - Starts the Express.js backend server with hot-reload (`http://localhost:5000`).
+- **`npm run server:test`** - Runs the automated backend API test suite.
 
 ---
 

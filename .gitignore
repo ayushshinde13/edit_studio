@@ -10,11 +10,13 @@ node_modules/
 !.yarn/versions
 
 # Next.js & Turbopack
-/.next/
-/.turbo/
-/out/
-/build/
-/dist/
+.next/
+**/.next/
+.turbo/
+**/.turbo/
+out/
+build/
+dist/
 
 # TypeScript & Cache
 *.tsbuildinfo
