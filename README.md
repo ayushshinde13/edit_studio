@@ -174,9 +174,8 @@ edit_studio/
 │   ├── test.js             # Automated API test suite
 │   └── package.json        # Backend dependencies & scripts
 │
-├── supabase/               # Supabase database migrations & schemas
 ├── scripts/                # Build and PDF generation helper scripts
-├── .github/workflows/      # Automated CI & Supabase keepalive workflows
+├── .github/workflows/      # Automated CI workflow
 ├── package.json            # Root workspace orchestrator
 ├── .gitignore              # Monorepo ignore rules
 └── README.md               # Root documentation
