@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#fb6b6a"/>
+  <!-- Stylized Modern Bold Studio E -->
+  <path d="M 18 16 H 46 V 23 H 26 V 28 H 42 V 35 H 26 V 41 H 46 V 48 H 18 Z" fill="#ffffff"/>
+  <circle cx="48" cy="18" r="4.5" fill="#ffffff" opacity="0.95"/>
+</svg>
