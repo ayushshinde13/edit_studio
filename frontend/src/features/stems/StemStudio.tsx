@@ -36,7 +36,9 @@ import { Card } from "@/design-system/primitives/card";
 import { Label } from "@/components/ui/label";
 import {
   getAudioContext,
+  decodeAudioFromFile,
   audioBufferToWav,
+  audioBufferToMp3,
 } from "@/lib/audio/audioContext";
 import {
   transposeChord,
@@ -91,6 +93,18 @@ export default function StemStudio() {
   const [masterVolume, setMasterVolume] = React.useState(0.9);
   const [pitchSemitones, setPitchSemitones] = React.useState(0);
   const [tempoRate, setTempoRate] = React.useState(1.0);
+
+  // Decoded Audio & Real Waveform State
+  const [decodedBuffer, setDecodedBuffer] = React.useState<AudioBuffer | null>(null);
+  const [isDecoding, setIsDecoding] = React.useState(false);
+  const [waveformPeaks, setWaveformPeaks] = React.useState<number[]>([]);
+
+  // Web Audio Playback Graph References
+  const activeSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
+  const masterGainRef = React.useRef<GainNode | null>(null);
+  const stemGainsRef = React.useRef<Map<string, GainNode>>(new Map());
+  const playbackStartTimeRef = React.useRef<number>(0);
+  const playbackStartOffsetRef = React.useRef<number>(0);
 
   // Moises Smart Practice Tools
   const [baseKeyIndex, setBaseKeyIndex] = React.useState(12); // "A Minor"
@@ -166,29 +180,174 @@ export default function StemStudio() {
     }
   }, [masterVolume]);
 
+  // Audio Playback Engine
+  const stopAudio = React.useCallback(() => {
+    if (activeSourceRef.current) {
+      try {
+        activeSourceRef.current.stop();
+        activeSourceRef.current.disconnect();
+      } catch {}
+      activeSourceRef.current = null;
+    }
+    setIsPlaying(false);
+  }, []);
+
+  const updateStemGains = React.useCallback((currentStems: StemTrack[]) => {
+    const hasSolo = currentStems.some((s) => s.solo);
+    currentStems.forEach((stem) => {
+      const g = stemGainsRef.current.get(stem.id);
+      if (g) {
+        try {
+          const target = hasSolo ? (stem.solo ? stem.volume : 0) : (stem.muted ? 0 : stem.volume);
+          g.gain.setTargetAtTime(target, getAudioContext().currentTime, 0.02);
+        } catch {}
+      }
+    });
+  }, []);
+
+  const playAudio = React.useCallback((offsetSec?: number) => {
+    if (!decodedBuffer) {
+      setIsPlaying(true);
+      return;
+    }
+    stopAudio();
+
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === "suspended") {
+        ctx.resume();
+      }
+
+      const masterGain = ctx.createGain();
+      masterGain.gain.setValueAtTime(masterVolume, ctx.currentTime);
+      masterGain.connect(ctx.destination);
+      masterGainRef.current = masterGain;
+
+      const source = ctx.createBufferSource();
+      source.buffer = decodedBuffer;
+      const effectiveRate = Math.max(0.25, Math.min(4, tempoRate * Math.pow(2, pitchSemitones / 12)));
+      source.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
+
+      if (hasSeparated) {
+        stemGainsRef.current.clear();
+        const hasSolo = stems.some((s) => s.solo);
+
+        stems.forEach((stem) => {
+          const stemGain = ctx.createGain();
+          let targetVol = 0;
+          if (hasSolo) {
+            targetVol = stem.solo ? stem.volume : 0;
+          } else {
+            targetVol = stem.muted ? 0 : stem.volume;
+          }
+          stemGain.gain.setValueAtTime(targetVol, ctx.currentTime);
+          stemGainsRef.current.set(stem.id, stemGain);
+
+          if (stem.id === "vocals") {
+            const bp = ctx.createBiquadFilter();
+            bp.type = "bandpass";
+            bp.frequency.setValueAtTime(1100, ctx.currentTime);
+            bp.Q.setValueAtTime(0.8, ctx.currentTime);
+            source.connect(bp);
+            bp.connect(stemGain);
+          } else if (stem.id === "bass") {
+            const lp = ctx.createBiquadFilter();
+            lp.type = "lowpass";
+            lp.frequency.setValueAtTime(220, ctx.currentTime);
+            source.connect(lp);
+            lp.connect(stemGain);
+          } else if (stem.id === "drums") {
+            const hp = ctx.createBiquadFilter();
+            hp.type = "highpass";
+            hp.frequency.setValueAtTime(3200, ctx.currentTime);
+            source.connect(hp);
+            hp.connect(stemGain);
+          } else {
+            const notch = ctx.createBiquadFilter();
+            notch.type = "peaking";
+            notch.frequency.setValueAtTime(2500, ctx.currentTime);
+            notch.gain.setValueAtTime(2, ctx.currentTime);
+            source.connect(notch);
+            notch.connect(stemGain);
+          }
+
+          stemGain.connect(masterGain);
+        });
+      } else {
+        source.connect(masterGain);
+      }
+
+      const currentSec = offsetSec !== undefined ? offsetSec : currentTime;
+      const safeOffset = Math.max(0, Math.min(currentSec, decodedBuffer.duration - 0.05));
+      source.start(0, safeOffset);
+      activeSourceRef.current = source;
+      playbackStartTimeRef.current = ctx.currentTime;
+      playbackStartOffsetRef.current = safeOffset;
+
+      source.onended = () => {
+        setIsPlaying(false);
+      };
+      setIsPlaying(true);
+    } catch (e) {
+      console.error("Audio playback error:", e);
+      setIsPlaying(true);
+    }
+  }, [decodedBuffer, masterVolume, tempoRate, pitchSemitones, hasSeparated, stems, currentTime, stopAudio]);
+
+  const seekTo = React.useCallback((targetTime: number) => {
+    const clamped = Math.max(0, Math.min(targetTime, duration));
+    setCurrentTime(clamped);
+    if (isPlaying) {
+      playAudio(clamped);
+    }
+  }, [duration, isPlaying, playAudio]);
+
+  // Master volume real-time sync
+  React.useEffect(() => {
+    if (masterGainRef.current) {
+      try {
+        masterGainRef.current.gain.setTargetAtTime(masterVolume, getAudioContext().currentTime, 0.02);
+      } catch {}
+    }
+  }, [masterVolume]);
+
+  // Pitch & Tempo real-time sync
+  React.useEffect(() => {
+    if (activeSourceRef.current) {
+      try {
+        const effectiveRate = Math.max(0.25, Math.min(4, tempoRate * Math.pow(2, pitchSemitones / 12)));
+        activeSourceRef.current.playbackRate.setTargetAtTime(effectiveRate, getAudioContext().currentTime, 0.02);
+      } catch {}
+    }
+  }, [pitchSemitones, tempoRate]);
+
   // Playback timer & Metronome Sync Loop
   React.useEffect(() => {
     let animId: number;
     let lastBeat = -1;
 
     if (isPlaying) {
-      const startWallTime = performance.now();
-      const initialCurrentTime = currentTime;
       const secondsPerBeat = 60 / (bpm * tempoRate);
 
       const tick = () => {
-        const elapsed = ((performance.now() - startWallTime) / 1000) * tempoRate;
-        let nextTime = initialCurrentTime + elapsed;
+        let nextTime: number;
+        if (decodedBuffer) {
+          const ctx = getAudioContext();
+          const effectiveRate = Math.max(0.25, Math.min(4, tempoRate * Math.pow(2, pitchSemitones / 12)));
+          const elapsed = (ctx.currentTime - playbackStartTimeRef.current) * effectiveRate;
+          nextTime = playbackStartOffsetRef.current + elapsed;
+        } else {
+          nextTime = currentTime + 0.05 * tempoRate;
+        }
 
         // Loop handling
         if (loopActive && nextTime >= loopB) {
-          nextTime = loopA;
-          setCurrentTime(loopA);
+          seekTo(loopA);
           return;
         }
 
         if (nextTime >= duration) {
-          setIsPlaying(false);
+          stopAudio();
           setCurrentTime(0);
           return;
         }
@@ -208,18 +367,17 @@ export default function StemStudio() {
       animId = requestAnimationFrame(tick);
     }
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, currentTime, duration, tempoRate, loopActive, loopA, loopB, metronomeActive, bpm, playMetronomeClick]);
+  }, [isPlaying, duration, tempoRate, pitchSemitones, loopActive, loopA, loopB, metronomeActive, bpm, playMetronomeClick, decodedBuffer, seekTo, stopAudio, currentTime]);
 
   // Handle Play toggle with optional Count-In
   const handleTogglePlay = () => {
     if (isPlaying) {
-      setIsPlaying(false);
+      stopAudio();
       setCountdownBeat(null);
       return;
     }
 
     if (countInActive && currentTime === 0) {
-      // Trigger 1-bar 4-beat Count-In
       setCountdownBeat(1);
       playMetronomeClick(true);
       const beatMs = (60 / bpm) * 1000;
@@ -241,10 +399,10 @@ export default function StemStudio() {
 
       setTimeout(() => {
         setCountdownBeat(null);
-        setIsPlaying(true);
+        playAudio(0);
       }, beatMs * 4);
     } else {
-      setIsPlaying(true);
+      playAudio(currentTime >= duration ? 0 : currentTime);
     }
   };
 
@@ -306,40 +464,78 @@ export default function StemStudio() {
 
       setHasSeparated(true);
       setIsProcessing(false);
+      if (isPlaying) {
+        setTimeout(() => playAudio(currentTime), 50);
+      }
     } catch (err) {
       setIsProcessing(false);
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
+      stopAudio();
       setFile(f);
-      setDuration(180);
+      setIsDecoding(true);
       setHasSeparated(false);
+
+      try {
+        const buf = await decodeAudioFromFile(f);
+        setDecodedBuffer(buf);
+        setDuration(buf.duration);
+        setCurrentTime(0);
+
+        // Extract 64 real normalized waveform peaks from the uploaded audio track
+        const channel = buf.getChannelData(0);
+        const blockSize = Math.floor(channel.length / 64);
+        const peaks: number[] = [];
+        for (let i = 0; i < 64; i++) {
+          let sum = 0;
+          const start = i * blockSize;
+          const end = start + blockSize;
+          for (let j = start; j < end; j += 4) {
+            sum += channel[j] * channel[j];
+          }
+          peaks.push(Math.sqrt(sum / (blockSize / 4)));
+        }
+        const maxPeak = Math.max(...peaks, 0.001);
+        const normalized = peaks.map((p) => Math.min(100, Math.max(14, Math.round((p / maxPeak) * 95))));
+        setWaveformPeaks(normalized);
+      } catch (err) {
+        console.error("Audio decoding error:", err);
+      } finally {
+        setIsDecoding(false);
+      }
     }
   };
 
   const toggleStemMute = (id: string) => {
-    setStems((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, muted: !s.muted } : s))
-    );
+    setStems((prev) => {
+      const next = prev.map((s) => (s.id === id ? { ...s, muted: !s.muted } : s));
+      updateStemGains(next);
+      return next;
+    });
   };
 
   const toggleStemSolo = (id: string) => {
     setStems((prev) => {
       const isCurrentSolo = prev.find((s) => s.id === id)?.solo;
-      return prev.map((s) => ({
+      const next = prev.map((s) => ({
         ...s,
         solo: s.id === id ? !isCurrentSolo : false,
       }));
+      updateStemGains(next);
+      return next;
     });
   };
 
   const setStemVolume = (id: string, vol: number) => {
-    setStems((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, volume: vol } : s))
-    );
+    setStems((prev) => {
+      const next = prev.map((s) => (s.id === id ? { ...s, volume: vol } : s));
+      updateStemGains(next);
+      return next;
+    });
   };
 
   const handleSaveToStudio = async () => {
@@ -378,17 +574,14 @@ export default function StemStudio() {
 
     try {
       const ctx = getAudioContext();
-      const length = 44100 * Math.min(duration, 300);
-      const buffer = ctx.createBuffer(2, length, 44100);
-
+      const sourceBuf = decodedBuffer || ctx.createBuffer(2, 44100 * Math.min(duration, 300), 44100);
       const songBaseName = file?.name.replace(/\.[^/.]+$/, "") || "song";
 
       if (option === "zip") {
         // Build ZIP package containing each individual stem WAV file
         const zipData: Record<string, Uint8Array> = {};
         for (const stem of stems) {
-          const stemBuf = ctx.createBuffer(2, 44100 * 5, 44100);
-          const wavBlob = audioBufferToWav(stemBuf);
+          const wavBlob = audioBufferToWav(sourceBuf);
           const arrayBuf = await wavBlob.arrayBuffer();
           zipData[`${songBaseName}_${stem.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}.wav`] = new Uint8Array(arrayBuf);
         }
@@ -402,7 +595,7 @@ export default function StemStudio() {
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        const wavBlob = audioBufferToWav(buffer);
+        const wavBlob = audioBufferToWav(sourceBuf);
         const url = URL.createObjectURL(wavBlob);
         const a = document.createElement("a");
         a.href = url;
@@ -468,7 +661,11 @@ export default function StemStudio() {
                   {file ? file.name : "Select or drag any song (Audio / Video)"}
                 </span>
                 <span className="block text-[10px] text-[#6b7280] dark:text-[#a1a1aa]">
-                  {file ? `${formatBytes(file.size)} • Ready for AI separation` : "MP3, WAV, AAC, FLAC, M4A, MP4 • 100% Client-Side"}
+                  {isDecoding
+                    ? "Decoding audio track into Web Audio memory..."
+                    : file
+                    ? `${formatBytes(file.size)} • ${decodedBuffer ? `${formatTime(duration)} • Ready to Play & Edit` : "Ready for AI separation"}`
+                    : "MP3, WAV, AAC, FLAC, M4A, MP4 • 100% Client-Side"}
                 </span>
               </div>
             </div>
@@ -775,15 +972,17 @@ export default function StemStudio() {
                         onClick={(e) => {
                           const rect = e.currentTarget.getBoundingClientRect();
                           const ratio = (e.clientX - rect.left) / rect.width;
-                          setCurrentTime(ratio * duration);
+                          seekTo(ratio * duration);
                         }}
                       >
                         {Array.from({ length: 64 }).map((_, barIdx) => {
                           const seed = stem.waveformSeed;
-                          const height = Math.max(
-                            12,
-                            Math.sin(barIdx * 0.3 * seed) * 45 + 35 + ((barIdx * 7) % 20)
-                          );
+                          const height = waveformPeaks.length === 64
+                            ? Math.max(14, Math.min(100, Math.round(waveformPeaks[barIdx] * (0.8 + 0.3 * Math.sin(barIdx * seed)))))
+                            : Math.max(
+                                12,
+                                Math.sin(barIdx * 0.3 * seed) * 45 + 35 + ((barIdx * 7) % 20)
+                              );
                           const isPast = (barIdx / 64) * duration <= currentTime;
 
                           return (
@@ -821,7 +1020,7 @@ export default function StemStudio() {
                   size="icon"
                   variant="outline"
                   className="h-8 w-8 rounded-[6px]"
-                  onClick={() => setCurrentTime(0)}
+                  onClick={() => seekTo(0)}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                 </Button>
@@ -1067,7 +1266,7 @@ export default function StemStudio() {
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => setCurrentTime(m.time)}
+                        onClick={() => seekTo(m.time)}
                         className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-[#121215] border border-[#e5e7eb] dark:border-[#27272a] hover:border-[#fb6b6a] transition-colors"
                       >
                         Jump
@@ -1078,7 +1277,7 @@ export default function StemStudio() {
                           setLoopA(m.time);
                           setLoopB(nextM ? nextM.time : Math.min(duration, m.time + 16));
                           setLoopActive(true);
-                          setCurrentTime(m.time);
+                          seekTo(m.time);
                         }}
                         className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-[#121215] border border-[#e5e7eb] dark:border-[#27272a] hover:border-[#fb6b6a] transition-colors"
                       >
