@@ -21,7 +21,6 @@ import {
   ShieldCheck,
   Cpu,
   Zap,
-  Lock,
 } from "lucide-react";
 
 interface FooterProps {
@@ -71,7 +70,6 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
     { label: "App Preferences & Engine", href: "/settings" },
     { label: "Local Cache & Models", href: "/settings" },
     { label: "Client-Side Privacy Architecture", href: "/privacy" },
-    { label: "Staff Admin Console", href: "/admin/login", icon: Lock },
   ];
 
   return (
@@ -226,15 +224,6 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
                 </li>
               ))}
             </ul>
-
-            <div className="pt-3 border-t border-[#e5e7eb] dark:border-[#27272a] space-y-1.5">
-              <span className="text-[10px] text-[#9ca3af] dark:text-[#71717a] font-mono block">
-                Open Source AI Engine
-              </span>
-              <p className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] leading-relaxed">
-                Demucs v4, Spleeter, LaMa & U2-Net running client-side via ONNX Runtime Web.
-              </p>
-            </div>
           </div>
         </div>
       </div>
