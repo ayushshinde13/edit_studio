@@ -20,7 +20,6 @@ import {
   Settings,
   ShieldCheck,
   Cpu,
-  ArrowUp,
   Zap,
   Lock,
 } from "lucide-react";
@@ -30,12 +29,6 @@ interface FooterProps {
 }
 
 export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
-  const scrollToTop = () => {
-    if (typeof window !== "undefined") {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  };
-
   const audioTools = [
     { label: "AI Stem Separator (2 & 4 Stems)", href: "/stems", badge: "AI" },
     { label: "AI Vocal Remover & Karaoke", href: "/audio/vocal-remover", badge: "Popular" },
@@ -246,7 +239,7 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
         </div>
       </div>
 
-      {/* Bottom Sub-Footer: Copyright, Privacy & Back to Top */}
+      {/* Bottom Sub-Footer: Copyright & Privacy */}
       <div className="border-t border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#09090b] py-4 px-4">
         <div className="container mx-auto max-w-7xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#6b7280] dark:text-[#a1a1aa]">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -257,18 +250,6 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
             <Link href="/privacy" className="hover:text-[#fb6b6a] transition-colors font-medium">
               Privacy Policy (100% Zero-Data)
             </Link>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={scrollToTop}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#f9fafb] dark:bg-[#121215] hover:border-[#fb6b6a] text-[#374151] dark:text-[#d4d4d8] text-[11px] font-medium transition-colors"
-              title="Scroll to top"
-            >
-              <ArrowUp className="h-3 w-3" />
-              <span>Back to Top</span>
-            </button>
           </div>
         </div>
       </div>
