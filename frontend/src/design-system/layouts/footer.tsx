@@ -212,8 +212,6 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <span>© {new Date().getFullYear()} <strong className="text-[#111827] dark:text-white font-medium">Edito</strong> Studio. All rights reserved.</span>
             <span>•</span>
-            <span className="text-[#10b981]">100% Client-Side Private DSP</span>
-            <span>•</span>
             <Link href="/privacy" className="hover:text-[#fb6b6a] transition-colors font-medium">
               Privacy Policy (100% Zero-Data)
             </Link>
