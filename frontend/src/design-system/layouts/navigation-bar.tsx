@@ -16,7 +16,6 @@ import {
   Palette,
   FolderHeart,
   Settings,
-  Heart,
   X,
   ArrowRight,
   Plus,
@@ -75,7 +74,7 @@ export function NavigationBar({ onOpenQuickCreate }: NavigationBarProps = {}) {
     <>
       <header className="sticky top-0 z-40 w-full border-b border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#09090b]">
         <div className="container mx-auto flex h-13 max-w-7xl items-center justify-between px-4">
-          {/* Left: Brand mark + privacy indicator */}
+          {/* Left: Brand mark */}
           <div className="flex items-center gap-4">
             <Link href="/" className="flex items-center gap-2.5 group">
               <div className="h-6 w-6 rounded-[4px] bg-[#fb6b6a] flex items-center justify-center text-white font-mono font-bold text-xs">
@@ -85,12 +84,6 @@ export function NavigationBar({ onOpenQuickCreate }: NavigationBarProps = {}) {
                 Edito
               </span>
             </Link>
-
-            {/* Privacy indicator pill */}
-            <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#121215] text-[11px] text-[#6b7280] dark:text-[#a1a1aa]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#10b981]" />
-              <span>100% Client-Side • Files stay on device</span>
-            </div>
           </div>
 
           {/* Center: Hub tabs */}
@@ -160,17 +153,6 @@ export function NavigationBar({ onOpenQuickCreate }: NavigationBarProps = {}) {
                 )}
               </button>
             )}
-
-            {/* Contribute Link */}
-            <a
-              href="https://github.com/sponsors"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden sm:flex items-center gap-1 text-xs text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a] px-2 h-7 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] hover:border-[#fb6b6a] transition-colors"
-            >
-              <Heart className="h-3 w-3 text-[#fb6b6a]" />
-              <span>Contribute</span>
-            </a>
           </div>
         </div>
       </header>
