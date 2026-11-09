@@ -647,6 +647,12 @@ export default function RemoveVideoWatermarkPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Link href="/creative/remove-background">
+            <Button variant="ghost" size="sm" className="h-8 text-xs text-[#6b7280] hover:text-[#111827]">
+              <Sparkles className="h-3.5 w-3.5 mr-1 text-[#fb6b6a]" />
+              BG Remover
+            </Button>
+          </Link>
           <Link href="/creative/remove-watermark">
             <Button variant="ghost" size="sm" className="h-8 text-xs text-[#6b7280] hover:text-[#111827]">
               <ImageIcon className="h-3.5 w-3.5 mr-1 text-[#fb6b6a]" />

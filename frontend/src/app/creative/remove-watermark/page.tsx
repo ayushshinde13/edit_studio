@@ -428,7 +428,13 @@ export default function RemoveWatermarkPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link href="/creative/remove-background">
+            <Button variant="outline" size="sm" className="h-8 text-xs px-3">
+              <Sparkles className="h-3.5 w-3.5 mr-1 text-[#fb6b6a]" />
+              Background Remover
+            </Button>
+          </Link>
           <Link href="/creative/remove-video-watermark">
             <Button variant="outline" size="sm" className="h-8 text-xs px-3">
               <Video className="h-3.5 w-3.5 mr-1 text-[#fb6b6a]" />

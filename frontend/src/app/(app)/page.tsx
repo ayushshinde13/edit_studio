@@ -5,6 +5,7 @@ import {
   Scissors,
   Wand2,
   Eraser,
+  Sparkles,
   Maximize,
   Video,
   ArrowRight,
@@ -74,6 +75,14 @@ export default function HomePage() {
       href: "/creative/remove-watermark",
       icon: Eraser,
       stats: "Neural Inpaint • Before/After Slider",
+    },
+    {
+      title: "AI Background Remover & Replacer",
+      subtitle: "Automatic subject extraction, transparent cutout, and studio color replacement.",
+      badge: "AI Cutout",
+      href: "/creative/remove-background",
+      icon: Sparkles,
+      stats: "Transparent PNG • Custom Backdrop",
     },
     {
       title: "Video Watermark & Logo Remover",
