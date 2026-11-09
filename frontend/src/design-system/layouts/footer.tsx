@@ -74,28 +74,6 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
 
   return (
     <footer className="w-full border-t border-[#e5e7eb] dark:border-[#27272a] bg-[#fcfcfd] dark:bg-[#0c0c0e] text-[#111827] dark:text-[#f4f4f5] transition-colors pb-16 md:pb-6">
-      {/* Top Banner: Privacy & Architecture Guarantee */}
-      <div className="border-b border-[#e5e7eb] dark:border-[#27272a] bg-[#f4f4f5]/60 dark:bg-[#121215]/80 py-3.5 px-4">
-        <div className="container mx-auto max-w-7xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 text-[#4b5563] dark:text-[#a1a1aa]">
-            <ShieldCheck className="h-4 w-4 text-[#10b981] shrink-0" />
-            <span>
-              <strong className="text-[#111827] dark:text-white font-medium">100% In-Browser Privacy:</strong>{" "}
-              Audio, photos, and videos are processed entirely on your device via WebGPU and WebAssembly. Zero media files are uploaded to any server.
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0 font-mono text-[11px] text-[#6b7280] dark:text-[#71717a]">
-            <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#10b981]" />
-              WebGPU Ready
-            </span>
-            <span>•</span>
-            <span>v1.2.0</span>
-          </div>
-        </div>
-      </div>
-
       {/* Main Multi-Column Links Section */}
       <div className="container mx-auto max-w-7xl px-4 py-10">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-8">
