@@ -10,8 +10,6 @@ import {
   Search,
   Command,
   ShieldCheck,
-  Zap,
-  Battery,
   SlidersHorizontal,
   Home,
   Music2,
@@ -42,9 +40,6 @@ export function NavigationBar({ onOpenQuickCreate }: NavigationBarProps = {}) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = React.useState(false);
-
-  // Performance mode state
-  const [perfMode, setPerfMode] = React.useState<"fps" | "eco">("fps");
 
   // Command palette state
   const [commandOpen, setCommandOpen] = React.useState(false);
@@ -149,25 +144,6 @@ export function NavigationBar({ onOpenQuickCreate }: NavigationBarProps = {}) {
                 ⌘K
               </kbd>
             </Button>
-
-            {/* Performance Mode Toggle */}
-            <button
-              onClick={() => setPerfMode((m) => (m === "fps" ? "eco" : "fps"))}
-              title={`Execution: ${perfMode === "fps" ? "High FPS WebGPU" : "Battery Saver WASM"}`}
-              className="hidden lg:flex items-center gap-1 px-2 h-7 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#121215] text-[11px] text-[#6b7280] dark:text-[#a1a1aa] hover:border-[#fb6b6a] transition-colors"
-            >
-              {perfMode === "fps" ? (
-                <>
-                  <Zap className="h-3 w-3 text-[#fb6b6a]" />
-                  <span>High-FPS</span>
-                </>
-              ) : (
-                <>
-                  <Battery className="h-3 w-3 text-[#10b981]" />
-                  <span>Low-Power</span>
-                </>
-              )}
-            </button>
 
             {/* Theme Toggler (Zero Layout Shift) */}
             {mounted && (
