@@ -1,3 +1,4 @@
+import * as React from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import AudioToolbox from "@/features/audio-tools/AudioToolbox";
@@ -66,7 +67,9 @@ export default async function AudioToolSlugPage({ params }: ToolPageProps) {
       </div>
 
       {/* Interactive Tool UI */}
-      <AudioToolbox toolId={tool.id} toolName={tool.name} />
+      <React.Suspense fallback={<div className="py-12 text-center text-xs text-[#6b7280] dark:text-[#a1a1aa]">Loading Audio Tool...</div>}>
+        <AudioToolbox toolId={tool.id} toolName={tool.name} />
+      </React.Suspense>
 
       {/* SEO HowTo Block */}
       <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] space-y-3">

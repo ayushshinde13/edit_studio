@@ -1,3 +1,4 @@
+import * as React from "react";
 import type { Metadata } from "next";
 import StemStudio from "@/features/stems/StemStudio";
 import { constructMetadata } from "@/lib/seo/metadata";
@@ -54,7 +55,9 @@ export default function StemSeparatorPage() {
       </div>
 
       {/* Main Studio Console */}
-      <StemStudio />
+      <React.Suspense fallback={<div className="py-20 text-center text-xs text-[#6b7280] dark:text-[#a1a1aa]">Loading Studio Console...</div>}>
+        <StemStudio />
+      </React.Suspense>
 
       {/* Programmatic SEO Guides & FAQ */}
       <div className="mt-12 pt-8 border-t border-[#e5e7eb] dark:border-[#27272a] space-y-8">

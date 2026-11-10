@@ -83,7 +83,7 @@ export default function StudioPage() {
             </Button>
           )}
           <Button asChild size="sm" className="h-8 text-xs px-3">
-            <Link href="/stems">
+            <Link href="/stems?new=1">
               <Plus className="h-3.5 w-3.5 mr-1" />
               New Project
             </Link>
@@ -154,7 +154,11 @@ export default function StudioPage() {
                   {proj.title}
                 </h3>
                 <p className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] mt-0.5">
-                  {proj.state.stems ? `${proj.state.stems.length} stems separated` : "Interactive session"}
+                  {proj.state.stems
+                    ? `${proj.state.stems.length} stems • ${proj.state.hasSeparated ? "Separated" : "Uploaded"}`
+                    : proj.state?.toolId
+                    ? `Tool: ${proj.state.toolId}`
+                    : "Interactive session"}
                 </p>
               </div>
 
@@ -171,7 +175,13 @@ export default function StudioPage() {
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                   <Button asChild variant="outline" size="sm" className="h-6 text-[11px] px-2">
-                    <Link href={proj.type === "stems" ? `/stems?projectId=${proj.id}` : `/audio/cutter`}>
+                    <Link
+                      href={
+                        proj.type === "stems"
+                          ? `/stems?projectId=${proj.id}`
+                          : `/audio/${proj.state?.toolId || "cutter"}?projectId=${proj.id}`
+                      }
+                    >
                       <ExternalLink className="h-3 w-3 mr-1" />
                       Open
                     </Link>

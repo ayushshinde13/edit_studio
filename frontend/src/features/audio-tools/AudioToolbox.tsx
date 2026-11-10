@@ -46,6 +46,8 @@ import {
 } from "@/lib/audio/audioContext";
 import { formatTime, formatBytes } from "@/lib/utils";
 import { zipSync } from "fflate";
+import { useSearchParams } from "next/navigation";
+import { saveProject, getProject } from "@/lib/storage/indexeddb";
 
 interface AudioToolboxProps {
   toolId: string;
@@ -53,12 +55,42 @@ interface AudioToolboxProps {
 }
 
 export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
+  const searchParams = useSearchParams();
+  const queryProjectId = searchParams.get("projectId");
+
   const [file, setFile] = React.useState<File | null>(null);
   const [decodedBuffer, setDecodedBuffer] = React.useState<AudioBuffer | null>(null);
   const [isDecoding, setIsDecoding] = React.useState(false);
   const [isPlaying, setIsPlaying] = React.useState(false);
   const [duration, setDuration] = React.useState(120);
   const [currentTime, setCurrentTime] = React.useState(0);
+
+  // Restore Project from IndexedDB if queryProjectId is present
+  React.useEffect(() => {
+    if (!queryProjectId) return;
+    let isMounted = true;
+    getProject(queryProjectId).then(async (saved) => {
+      if (!saved || !saved.audioBlob || !isMounted) return;
+      try {
+        const reconstructedFile = new File([saved.audioBlob], saved.audioFileName || `${saved.title}.mp3`, {
+          type: saved.audioFileType || "audio/mpeg",
+        });
+        setFile(reconstructedFile);
+        const buf = await decodeAudioFromFile(reconstructedFile);
+        if (!isMounted) return;
+        setDecodedBuffer(buf);
+        setDuration(buf.duration);
+        if (saved.state?.trimStart !== undefined) setTrimStart(saved.state.trimStart);
+        if (saved.state?.trimEnd !== undefined) setTrimEnd(saved.state.trimEnd);
+        else setTrimEnd(buf.duration);
+      } catch (e) {
+        console.error("AudioToolbox failed to restore project:", e);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [queryProjectId]);
 
   const activeSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
   const playbackStartTimeRef = React.useRef<number>(0);
@@ -235,6 +267,29 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
         setTrimStart(0);
         setTrimEnd(buf.duration);
         setCurrentTime(0);
+
+        // Auto-save session to IndexedDB
+        try {
+          const projId = `audio_${toolId}_${Date.now()}`;
+          await saveProject({
+            id: projId,
+            type: "audio_tool",
+            title: `${f.name.replace(/\.[^/.]+$/, "")} (${toolName})`,
+            updatedAt: Date.now(),
+            sizeBytes: f.size,
+            audioBlob: f,
+            audioFileName: f.name,
+            audioFileType: f.type,
+            state: {
+              toolId,
+              duration: buf.duration,
+              trimStart: 0,
+              trimEnd: buf.duration,
+            },
+          });
+        } catch (dbErr) {
+          console.error("Failed to auto-save audio session to IndexedDB:", dbErr);
+        }
       } catch (err) {
         console.warn("Direct file decoding notice:", err);
       } finally {

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   AudioLines,
   Scissors,
@@ -80,10 +81,14 @@ export function Footer({ onOpenQuickCreate }: FooterProps = {}) {
           {/* Column 1: Brand & Studio Bio */}
           <div className="lg:col-span-1 space-y-4">
             <Link href="/" className="flex items-center gap-2.5 group inline-flex">
-              <div className="h-7 w-7 rounded-[5px] bg-[#fb6b6a] flex items-center justify-center text-white font-mono font-bold text-sm shadow-sm group-hover:bg-[#ea5857] transition-colors">
-                E
-              </div>
-              <span className="font-bold text-base tracking-tight text-[#111827] dark:text-white">
+              <Image
+                src="/logo1.png"
+                alt="Edito Logo"
+                width={40}
+                height={25}
+                className="h-6.5 w-auto object-contain transition-transform duration-200 group-hover:scale-105"
+              />
+              <span className="font-bold text-lg tracking-tight text-[#111827] dark:text-white leading-none select-none">
                 Edito
               </span>
             </Link>

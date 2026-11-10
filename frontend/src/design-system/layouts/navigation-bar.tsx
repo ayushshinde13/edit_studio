@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -77,10 +78,15 @@ export function NavigationBar({ onOpenQuickCreate }: NavigationBarProps = {}) {
           {/* Left: Brand mark */}
           <div className="flex items-center gap-4">
             <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="h-6 w-6 rounded-[4px] bg-[#fb6b6a] flex items-center justify-center text-white font-mono font-bold text-xs">
-                E
-              </div>
-              <span className="font-semibold text-sm tracking-tight text-[#111827] dark:text-[#f4f4f5]">
+              <Image
+                src="/logo1.png"
+                alt="Edito Logo"
+                width={38}
+                height={24}
+                className="h-6 w-auto object-contain transition-transform duration-200 group-hover:scale-105"
+                priority
+              />
+              <span className="font-bold text-base tracking-tight text-[#111827] dark:text-[#f4f4f5] leading-none select-none">
                 Edito
               </span>
             </Link>
