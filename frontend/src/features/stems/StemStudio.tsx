@@ -71,7 +71,7 @@ interface ChordItem {
   chord: string;
 }
 
-// Moises-Style Key List
+// Key List
 const KEYS = [
   "C Major", "C# Major", "D Major", "Eb Major", "E Major", "F Major",
   "F# Major", "G Major", "Ab Major", "A Major", "Bb Major", "B Major",
@@ -450,9 +450,9 @@ export default function StemStudio() {
   const [processStage, setProcessStage] = React.useState("");
   const [hasSeparated, setHasSeparated] = React.useState(false);
 
-  // Stems configuration (Moises Signature Colors)
+  // Stems configuration
   const [stems, setStems] = React.useState<StemTrack[]>([
-    { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0.85, muted: false, solo: false, waveformSeed: 1.1 },
+    { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0, muted: false, solo: false, waveformSeed: 1.1 },
     { id: "drums", name: "Drums", iconType: "drums", color: "#38bdf8", volume: 0.8, muted: false, solo: false, waveformSeed: 2.3 },
     { id: "bass", name: "Bass", iconType: "bass", color: "#a855f7", volume: 0.75, muted: false, solo: false, waveformSeed: 3.7 },
     { id: "other", name: "Other / Melodic", iconType: "other", color: "#10b981", volume: 0.8, muted: false, solo: false, waveformSeed: 4.2 },
@@ -496,7 +496,7 @@ export default function StemStudio() {
     setIsPlaying(false);
   }, []);
 
-  // Moises Smart Practice Tools
+  // Smart Practice Tools
   const [baseKeyIndex, setBaseKeyIndex] = React.useState(12); // "A Minor"
   const [bpm, setBpm] = React.useState(124);
   const [metronomeActive, setMetronomeActive] = React.useState(false);
@@ -1193,12 +1193,12 @@ export default function StemStudio() {
       let nextStems: StemTrack[] = [];
       if (stemMode === 2) {
         nextStems = [
-          { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0.85, muted: false, solo: false, waveformSeed: 1.1 },
+          { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0, muted: false, solo: false, waveformSeed: 1.1 },
           { id: "other", name: "Instrumental / Music", iconType: "other", color: "#10b981", volume: 0.8, muted: false, solo: false, waveformSeed: 3.5 },
         ];
       } else if (stemMode === 5) {
         nextStems = [
-          { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0.85, muted: false, solo: false, waveformSeed: 1.1 },
+          { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0, muted: false, solo: false, waveformSeed: 1.1 },
           { id: "drums", name: "Drums", iconType: "drums", color: "#38bdf8", volume: 0.8, muted: false, solo: false, waveformSeed: 2.3 },
           { id: "bass", name: "Bass", iconType: "bass", color: "#a855f7", volume: 0.75, muted: false, solo: false, waveformSeed: 3.7 },
           { id: "guitar", name: "Guitar", iconType: "guitar", color: "#f59e0b", volume: 0.8, muted: false, solo: false, waveformSeed: 4.8 },
@@ -1206,7 +1206,7 @@ export default function StemStudio() {
         ];
       } else {
         nextStems = [
-          { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0.85, muted: false, solo: false, waveformSeed: 1.1 },
+          { id: "vocals", name: "Vocals", iconType: "vocals", color: "#fb6b6a", volume: 0, muted: false, solo: false, waveformSeed: 1.1 },
           { id: "drums", name: "Drums", iconType: "drums", color: "#38bdf8", volume: 0.8, muted: false, solo: false, waveformSeed: 2.3 },
           { id: "bass", name: "Bass", iconType: "bass", color: "#a855f7", volume: 0.75, muted: false, solo: false, waveformSeed: 3.7 },
           { id: "other", name: "Other / Melodic", iconType: "other", color: "#10b981", volume: 0.8, muted: false, solo: false, waveformSeed: 4.2 },
@@ -1312,7 +1312,7 @@ export default function StemStudio() {
     setTimeout(() => setSavedSuccess(false), 3000);
   };
 
-  // Moises Multi-Stem Export Engine
+  // Multi-Stem Export Engine
   const handleExportOption = async (option: "mix" | "karaoke" | "drumless" | "acapella" | "zip" | string) => {
     setIsExporting(true);
 
@@ -1337,7 +1337,7 @@ export default function StemStudio() {
         const url = URL.createObjectURL(zipBlob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${songBaseName}_Moises_Stems.zip`;
+        a.download = `${songBaseName}_Stems.zip`;
         a.click();
         URL.revokeObjectURL(url);
       } else if (option === "karaoke") {
@@ -1441,7 +1441,7 @@ export default function StemStudio() {
   return (
     <div className="space-y-4">
       {/* ========================================================================= */}
-      {/* 1. MOISES TOP CONTROL BAR: UPLOAD, KEY, BPM, METRONOME, COUNT-IN */}
+      {/* 1. TOP CONTROL BAR: UPLOAD, KEY, BPM, METRONOME, COUNT-IN */}
       {/* ========================================================================= */}
       <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215]">
         <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
@@ -1550,7 +1550,7 @@ export default function StemStudio() {
           </div>
         )}
 
-        {/* Moises Quick Metric Ribbons: Key, BPM, Metronome, Count-In */}
+        {/* Quick Metric Ribbons: Key, BPM, Metronome, Count-In */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 pt-3 border-t border-[#e5e7eb] dark:border-[#27272a]">
           {/* 1. Song Key */}
           <div className="p-2 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] flex items-center justify-between">
@@ -1633,7 +1633,7 @@ export default function StemStudio() {
       </Card>
 
       {/* ========================================================================= */}
-      {/* 2. MOISES MULTITRACK MIXER: DEDICATED TRACK WAVEFORMS PER STEM */}
+      {/* 2. MULTITRACK MIXER: DEDICATED TRACK WAVEFORMS PER STEM */}
       {/* ========================================================================= */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Main Stage: Multitrack Waveform Lanes (8 Cols on Desktop) */}
@@ -1643,7 +1643,7 @@ export default function StemStudio() {
               <div className="flex items-center gap-2">
                 <Layers className="h-4 w-4 text-[#fb6b6a]" />
                 <span className="text-xs font-semibold text-[#111827] dark:text-[#f4f4f5]">
-                  Moises Multitrack Waveform Lanes
+                  Multitrack Waveform Lanes
                 </span>
                 <Badge variant="outline" className="text-[10px]">
                   {stems.length} Stems
@@ -1702,7 +1702,7 @@ export default function StemStudio() {
               </div>
             </div>
 
-            {/* Individual Stem Waveform Lanes (The Signature Moises Interface) */}
+            {/* Individual Stem Waveform Lanes */}
             <div className="space-y-2">
               {stems.map((stem) => {
                 const isSoloAny = stems.some((s) => s.solo);
@@ -2009,10 +2009,10 @@ export default function StemStudio() {
             </div>
           </Card>
 
-          {/* Moises 1-Click Export Presets */}
+          {/* 1-Click Export Presets */}
           <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] space-y-2.5">
             <Label className="text-xs font-semibold text-[#111827] dark:text-[#f4f4f5] block">
-              Moises Export Presets
+              Export Presets
             </Label>
             <div className="grid grid-cols-2 gap-1.5">
               <Button

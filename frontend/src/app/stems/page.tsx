@@ -85,7 +85,7 @@ export default function StemSeparatorPage() {
           <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215]">
             <Zap className="h-4 w-4 text-[#f59e0b] mb-2" />
             <h3 className="text-xs font-semibold text-[#111827] dark:text-[#f4f4f5] mb-1">
-              Moises-Style Practice
+              Smart Practice
             </h3>
             <p className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] leading-normal">
               Includes full practice suite: real-time transpose (-12 to +12 semitones), speed presets (0.75x, 0.9x), metronome click, and chroma chord detection.
