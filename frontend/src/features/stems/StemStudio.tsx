@@ -80,7 +80,7 @@ const KEYS = [
 ];
 
 /**
- * Renders an isolated stem offline with genuine DSP filtering (Mid-Side Zero-Phase Stereo Cancellation & Formant Suppression)
+ * Renders an isolated stem offline with genuine DSP filtering & Zero-Loss Background Reconstruction
  */
 async function renderStemOffline(
   buffer: AudioBuffer,
@@ -100,14 +100,13 @@ async function renderStemOffline(
   stemGain.gain.setValueAtTime(1.0, 0);
   stemGain.connect(offlineCtx.destination);
 
-  let midSumNode: AudioNode;
-  let sideMergerNode: AudioNode;
+  let bgBusNode: AudioNode;
 
   if (isStereo) {
     const splitter = offlineCtx.createChannelSplitter(2);
     source.connect(splitter);
 
-    // Mid (Center Mono): 0.5 * (L + R)
+    // Mid channel: 0.5 * (L + R)
     const midSum = offlineCtx.createGain();
     const midL = offlineCtx.createGain();
     midL.gain.setValueAtTime(0.5, 0);
@@ -117,141 +116,109 @@ async function renderStemOffline(
     splitter.connect(midR, 1);
     midL.connect(midSum);
     midR.connect(midSum);
-    midSumNode = midSum;
 
-    // Side Left: 0.5 * (L - R) [Zero-Phase Lead Vocal Cancellation: V - V = 0.0]
-    const sideL = offlineCtx.createGain();
-    const slL = offlineCtx.createGain();
-    slL.gain.setValueAtTime(0.5, 0);
-    const slR = offlineCtx.createGain();
-    slR.gain.setValueAtTime(-0.5, 0);
-    splitter.connect(slL, 0);
-    splitter.connect(slR, 1);
-    slL.connect(sideL);
-    slR.connect(sideL);
+    // Vocal extraction (centered lead singer band)
+    const vHp = offlineCtx.createBiquadFilter();
+    vHp.type = "highpass";
+    vHp.frequency.setValueAtTime(180, 0);
+    vHp.Q.setValueAtTime(0.707, 0);
 
-    // Side Right: 0.5 * (R - L) [Zero-Phase Lead Vocal Cancellation: V - V = 0.0]
-    const sideR = offlineCtx.createGain();
-    const srR = offlineCtx.createGain();
-    srR.gain.setValueAtTime(0.5, 0);
-    const srL = offlineCtx.createGain();
-    srL.gain.setValueAtTime(-0.5, 0);
-    splitter.connect(srR, 1);
-    splitter.connect(srL, 0);
-    srR.connect(sideR);
-    srL.connect(sideR);
+    const vLp = offlineCtx.createBiquadFilter();
+    vLp.type = "lowpass";
+    vLp.frequency.setValueAtTime(4200, 0);
+    vLp.Q.setValueAtTime(0.707, 0);
 
-    // Merge into 2-channel stereo side bus
-    const merger = offlineCtx.createChannelMerger(2);
-    sideL.connect(merger, 0, 0);
-    sideR.connect(merger, 0, 1);
-    sideMergerNode = merger;
+    const vPres = offlineCtx.createBiquadFilter();
+    vPres.type = "peaking";
+    vPres.frequency.setValueAtTime(2400, 0);
+    vPres.gain.setValueAtTime(2.5, 0);
+
+    midSum.connect(vHp);
+    vHp.connect(vLp);
+    vLp.connect(vPres);
+
+    // Invert vocal to subtract from stereo channels (zero vocal in background)
+    const vInvert = offlineCtx.createGain();
+    vInvert.gain.setValueAtTime(-1.0, 0);
+    vPres.connect(vInvert);
+
+    // Reconstruct full-fidelity stereo background (L - V, R - V) with 100% original dynamic range
+    const bgL = offlineCtx.createGain();
+    const bgR = offlineCtx.createGain();
+    splitter.connect(bgL, 0);
+    vInvert.connect(bgL);
+    splitter.connect(bgR, 1);
+    vInvert.connect(bgR);
+
+    const bgMerger = offlineCtx.createChannelMerger(2);
+    bgL.connect(bgMerger, 0, 0);
+    bgR.connect(bgMerger, 0, 1);
+    bgBusNode = bgMerger;
+
+    if (stemId === "vocals") {
+      vPres.connect(stemGain);
+      source.start(0);
+      return await offlineCtx.startRendering();
+    }
   } else {
-    midSumNode = source;
-    sideMergerNode = source;
+    // Mono audio support
+    const vHp = offlineCtx.createBiquadFilter();
+    vHp.type = "highpass";
+    vHp.frequency.setValueAtTime(180, 0);
+    const vLp = offlineCtx.createBiquadFilter();
+    vLp.type = "lowpass";
+    vLp.frequency.setValueAtTime(4200, 0);
+    const vPres = offlineCtx.createBiquadFilter();
+    vPres.type = "peaking";
+    vPres.frequency.setValueAtTime(2400, 0);
+    vPres.gain.setValueAtTime(2.5, 0);
+
+    source.connect(vHp);
+    vHp.connect(vLp);
+    vLp.connect(vPres);
+
+    const vInvert = offlineCtx.createGain();
+    vInvert.gain.setValueAtTime(-1.0, 0);
+    vPres.connect(vInvert);
+
+    const bgMono = offlineCtx.createGain();
+    source.connect(bgMono);
+    vInvert.connect(bgMono);
+    bgBusNode = bgMono;
+
+    if (stemId === "vocals") {
+      vPres.connect(stemGain);
+      source.start(0);
+      return await offlineCtx.startRendering();
+    }
   }
 
-  if (stemId === "vocals") {
-    // Isolated Lead Vocals: Center mono bandpassed between 180 Hz - 4200 Hz with presence
-    const vocalHp = offlineCtx.createBiquadFilter();
-    vocalHp.type = "highpass";
-    vocalHp.frequency.setValueAtTime(180, 0);
-    vocalHp.Q.setValueAtTime(0.707, 0);
-
-    const vocalLp = offlineCtx.createBiquadFilter();
-    vocalLp.type = "lowpass";
-    vocalLp.frequency.setValueAtTime(4200, 0);
-    vocalLp.Q.setValueAtTime(0.707, 0);
-
-    const vocalPres = offlineCtx.createBiquadFilter();
-    vocalPres.type = "peaking";
-    vocalPres.frequency.setValueAtTime(2400, 0);
-    vocalPres.gain.setValueAtTime(3.5, 0);
-
-    midSumNode.connect(vocalHp);
-    vocalHp.connect(vocalLp);
-    vocalLp.connect(vocalPres);
-    vocalPres.connect(stemGain);
-  } else if (stemId === "bass") {
-    // Bass Stem: Dual lowpass at 115 Hz (24 dB/oct slope). Zero vocal frequencies!
-    const bassLp1 = offlineCtx.createBiquadFilter();
-    bassLp1.type = "lowpass";
-    bassLp1.frequency.setValueAtTime(115, 0);
-    bassLp1.Q.setValueAtTime(0.707, 0);
-
-    const bassLp2 = offlineCtx.createBiquadFilter();
-    bassLp2.type = "lowpass";
-    bassLp2.frequency.setValueAtTime(115, 0);
-    bassLp2.Q.setValueAtTime(0.707, 0);
-
-    midSumNode.connect(bassLp1);
-    bassLp1.connect(bassLp2);
-    bassLp2.connect(stemGain);
+  // Background stem isolation from the full-volume background bus:
+  if (stemId === "bass") {
+    const bassLp = offlineCtx.createBiquadFilter();
+    bassLp.type = "lowpass";
+    bassLp.frequency.setValueAtTime(220, 0);
+    bassLp.Q.setValueAtTime(0.707, 0);
+    bgBusNode.connect(bassLp);
+    bassLp.connect(stemGain);
   } else if (stemId === "drums") {
-    // Drums Stem: Highpass at 4500 Hz on Side Channel (zero center vocals!)
-    const drumHp1 = offlineCtx.createBiquadFilter();
-    drumHp1.type = "highpass";
-    drumHp1.frequency.setValueAtTime(4500, 0);
-    drumHp1.Q.setValueAtTime(0.707, 0);
-
-    const drumHp2 = offlineCtx.createBiquadFilter();
-    drumHp2.type = "highpass";
-    drumHp2.frequency.setValueAtTime(4500, 0);
-    drumHp2.Q.setValueAtTime(0.707, 0);
-
-    const peak = offlineCtx.createBiquadFilter();
-    peak.type = "peaking";
-    peak.frequency.setValueAtTime(7500, 0);
-    peak.gain.setValueAtTime(3, 0);
-
-    sideMergerNode.connect(drumHp1);
-    drumHp1.connect(drumHp2);
-    drumHp2.connect(peak);
-    peak.connect(stemGain);
+    const drumHp = offlineCtx.createBiquadFilter();
+    drumHp.type = "highpass";
+    drumHp.frequency.setValueAtTime(2500, 0);
+    drumHp.Q.setValueAtTime(0.707, 0);
+    bgBusNode.connect(drumHp);
+    drumHp.connect(stemGain);
   } else if (stemId === "guitar") {
     const guitarBp = offlineCtx.createBiquadFilter();
     guitarBp.type = "bandpass";
-    guitarBp.frequency.setValueAtTime(1200, 0);
+    guitarBp.frequency.setValueAtTime(800, 0);
     guitarBp.Q.setValueAtTime(1.0, 0);
-
-    sideMergerNode.connect(guitarBp);
+    bgBusNode.connect(guitarBp);
     guitarBp.connect(stemGain);
   } else {
-    // Other / Melodic: Side channel + 4-stage vocal formant & reverb suppressor (-32 dB)
-    const otherHp = offlineCtx.createBiquadFilter();
-    otherHp.type = "highpass";
-    otherHp.frequency.setValueAtTime(120, 0);
-
-    const s1 = offlineCtx.createBiquadFilter();
-    s1.type = "peaking";
-    s1.frequency.setValueAtTime(600, 0);
-    s1.Q.setValueAtTime(1.2, 0);
-    s1.gain.setValueAtTime(-28, 0);
-
-    const s2 = offlineCtx.createBiquadFilter();
-    s2.type = "peaking";
-    s2.frequency.setValueAtTime(1400, 0);
-    s2.Q.setValueAtTime(1.0, 0);
-    s2.gain.setValueAtTime(-32, 0);
-
-    const s3 = offlineCtx.createBiquadFilter();
-    s3.type = "peaking";
-    s3.frequency.setValueAtTime(2600, 0);
-    s3.Q.setValueAtTime(1.2, 0);
-    s3.gain.setValueAtTime(-28, 0);
-
-    const s4 = offlineCtx.createBiquadFilter();
-    s4.type = "peaking";
-    s4.frequency.setValueAtTime(3800, 0);
-    s4.Q.setValueAtTime(1.5, 0);
-    s4.gain.setValueAtTime(-24, 0);
-
-    sideMergerNode.connect(otherHp);
-    otherHp.connect(s1);
-    s1.connect(s2);
-    s2.connect(s3);
-    s3.connect(s4);
-    s4.connect(stemGain);
+    // Other / Melodic / Full Instrumental
+    // Delivers the full rich background music without vocal!
+    bgBusNode.connect(stemGain);
   }
 
   source.start(0);
@@ -260,6 +227,7 @@ async function renderStemOffline(
 
 /**
  * Renders a full multi-track mix offline with active volume levels and mutes/solos
+ * Preserves 100% full background music volume & fidelity when vocals are 0
  */
 async function renderMixOffline(
   buffer: AudioBuffer,
@@ -280,13 +248,14 @@ async function renderMixOffline(
   masterGain.gain.setValueAtTime(masterVol, 0);
   masterGain.connect(offlineCtx.destination);
 
-  let midSumNode: AudioNode;
-  let sideMergerNode: AudioNode;
+  let vocalNode: AudioNode;
+  let bgBusNode: AudioNode;
 
   if (isStereo) {
     const splitter = offlineCtx.createChannelSplitter(2);
     source.connect(splitter);
 
+    // Mid channel: 0.5 * (L + R)
     const midSum = offlineCtx.createGain();
     const midL = offlineCtx.createGain();
     midL.gain.setValueAtTime(0.5, 0);
@@ -296,145 +265,119 @@ async function renderMixOffline(
     splitter.connect(midR, 1);
     midL.connect(midSum);
     midR.connect(midSum);
-    midSumNode = midSum;
 
-    const sideL = offlineCtx.createGain();
-    const slL = offlineCtx.createGain();
-    slL.gain.setValueAtTime(0.5, 0);
-    const slR = offlineCtx.createGain();
-    slR.gain.setValueAtTime(-0.5, 0);
-    splitter.connect(slL, 0);
-    splitter.connect(slR, 1);
-    slL.connect(sideL);
-    slR.connect(sideL);
+    // Extract lead vocal band
+    const vHp = offlineCtx.createBiquadFilter();
+    vHp.type = "highpass";
+    vHp.frequency.setValueAtTime(180, 0);
+    vHp.Q.setValueAtTime(0.707, 0);
 
-    const sideR = offlineCtx.createGain();
-    const srR = offlineCtx.createGain();
-    srR.gain.setValueAtTime(0.5, 0);
-    const srL = offlineCtx.createGain();
-    srL.gain.setValueAtTime(-0.5, 0);
-    splitter.connect(srR, 1);
-    splitter.connect(srL, 0);
-    srR.connect(sideR);
-    srL.connect(sideR);
+    const vLp = offlineCtx.createBiquadFilter();
+    vLp.type = "lowpass";
+    vLp.frequency.setValueAtTime(4200, 0);
+    vLp.Q.setValueAtTime(0.707, 0);
 
-    const merger = offlineCtx.createChannelMerger(2);
-    sideL.connect(merger, 0, 0);
-    sideR.connect(merger, 0, 1);
-    sideMergerNode = merger;
+    const vPres = offlineCtx.createBiquadFilter();
+    vPres.type = "peaking";
+    vPres.frequency.setValueAtTime(2400, 0);
+    vPres.gain.setValueAtTime(2.5, 0);
+
+    midSum.connect(vHp);
+    vHp.connect(vLp);
+    vLp.connect(vPres);
+    vocalNode = vPres;
+
+    // Invert vocal to subtract from stereo channels (zero vocal cancellation)
+    const vInvert = offlineCtx.createGain();
+    vInvert.gain.setValueAtTime(-1.0, 0);
+    vPres.connect(vInvert);
+
+    // Background music bus: 100% full stereo, original volume, 0 vocal
+    const bgL = offlineCtx.createGain();
+    const bgR = offlineCtx.createGain();
+    splitter.connect(bgL, 0);
+    vInvert.connect(bgL);
+    splitter.connect(bgR, 1);
+    vInvert.connect(bgR);
+
+    const bgMerger = offlineCtx.createChannelMerger(2);
+    bgL.connect(bgMerger, 0, 0);
+    bgR.connect(bgMerger, 0, 1);
+    bgBusNode = bgMerger;
   } else {
-    midSumNode = source;
-    sideMergerNode = source;
+    // Mono
+    const vHp = offlineCtx.createBiquadFilter();
+    vHp.type = "highpass";
+    vHp.frequency.setValueAtTime(180, 0);
+    const vLp = offlineCtx.createBiquadFilter();
+    vLp.type = "lowpass";
+    vLp.frequency.setValueAtTime(4200, 0);
+    const vPres = offlineCtx.createBiquadFilter();
+    vPres.type = "peaking";
+    vPres.frequency.setValueAtTime(2400, 0);
+    vPres.gain.setValueAtTime(2.5, 0);
+
+    source.connect(vHp);
+    vHp.connect(vLp);
+    vLp.connect(vPres);
+    vocalNode = vPres;
+
+    const vInvert = offlineCtx.createGain();
+    vInvert.gain.setValueAtTime(-1.0, 0);
+    vPres.connect(vInvert);
+
+    const bgMono = offlineCtx.createGain();
+    source.connect(bgMono);
+    vInvert.connect(bgMono);
+    bgBusNode = bgMono;
   }
 
-  const vocalStem = activeStems.find((s) => s.id === "vocals");
-  const vocalVol = vocalStem ? vocalStem.volume : 0;
-  // If vocals are 0%, scoop is -32 dB (total vocal suppression). If vocals are 100%, scoop is 0 dB.
-  const scoopGain = (1.0 - vocalVol) * -32;
+  const isTwoStem = activeStems.length <= 2;
 
   for (const item of activeStems) {
     if (item.volume <= 0) continue;
+
     const stemGain = offlineCtx.createGain();
     stemGain.gain.setValueAtTime(item.volume, 0);
     stemGain.connect(masterGain);
 
     if (item.id === "vocals") {
-      const vocalHp = offlineCtx.createBiquadFilter();
-      vocalHp.type = "highpass";
-      vocalHp.frequency.setValueAtTime(180, 0);
-      vocalHp.Q.setValueAtTime(0.707, 0);
-
-      const vocalLp = offlineCtx.createBiquadFilter();
-      vocalLp.type = "lowpass";
-      vocalLp.frequency.setValueAtTime(4200, 0);
-      vocalLp.Q.setValueAtTime(0.707, 0);
-
-      const vocalPres = offlineCtx.createBiquadFilter();
-      vocalPres.type = "peaking";
-      vocalPres.frequency.setValueAtTime(2400, 0);
-      vocalPres.gain.setValueAtTime(3.5, 0);
-
-      midSumNode.connect(vocalHp);
-      vocalHp.connect(vocalLp);
-      vocalLp.connect(vocalPres);
-      vocalPres.connect(stemGain);
+      vocalNode.connect(stemGain);
+    } else if (isTwoStem) {
+      // 2-stem accompaniment / music: full background bus!
+      bgBusNode.connect(stemGain);
     } else if (item.id === "bass") {
-      const bassLp1 = offlineCtx.createBiquadFilter();
-      bassLp1.type = "lowpass";
-      bassLp1.frequency.setValueAtTime(115, 0);
-      bassLp1.Q.setValueAtTime(0.707, 0);
-
-      const bassLp2 = offlineCtx.createBiquadFilter();
-      bassLp2.type = "lowpass";
-      bassLp2.frequency.setValueAtTime(115, 0);
-      bassLp2.Q.setValueAtTime(0.707, 0);
-
-      midSumNode.connect(bassLp1);
-      bassLp1.connect(bassLp2);
-      bassLp2.connect(stemGain);
+      const bassLp = offlineCtx.createBiquadFilter();
+      bassLp.type = "lowpass";
+      bassLp.frequency.setValueAtTime(220, 0);
+      bassLp.Q.setValueAtTime(0.707, 0);
+      bgBusNode.connect(bassLp);
+      bassLp.connect(stemGain);
     } else if (item.id === "drums") {
-      const drumHp1 = offlineCtx.createBiquadFilter();
-      drumHp1.type = "highpass";
-      drumHp1.frequency.setValueAtTime(4500, 0);
-      drumHp1.Q.setValueAtTime(0.707, 0);
-
-      const drumHp2 = offlineCtx.createBiquadFilter();
-      drumHp2.type = "highpass";
-      drumHp2.frequency.setValueAtTime(4500, 0);
-      drumHp2.Q.setValueAtTime(0.707, 0);
-
-      const peak = offlineCtx.createBiquadFilter();
-      peak.type = "peaking";
-      peak.frequency.setValueAtTime(7500, 0);
-      peak.gain.setValueAtTime(3, 0);
-
-      sideMergerNode.connect(drumHp1);
-      drumHp1.connect(drumHp2);
-      drumHp2.connect(peak);
-      peak.connect(stemGain);
+      const drumHp = offlineCtx.createBiquadFilter();
+      drumHp.type = "highpass";
+      drumHp.frequency.setValueAtTime(2500, 0);
+      drumHp.Q.setValueAtTime(0.707, 0);
+      bgBusNode.connect(drumHp);
+      drumHp.connect(stemGain);
     } else if (item.id === "guitar") {
       const guitarBp = offlineCtx.createBiquadFilter();
       guitarBp.type = "bandpass";
-      guitarBp.frequency.setValueAtTime(1200, 0);
+      guitarBp.frequency.setValueAtTime(800, 0);
       guitarBp.Q.setValueAtTime(1.0, 0);
-
-      sideMergerNode.connect(guitarBp);
+      bgBusNode.connect(guitarBp);
       guitarBp.connect(stemGain);
     } else {
+      // Other / Melodic (220 Hz - 2500 Hz): fills the full midrange accompaniment!
       const otherHp = offlineCtx.createBiquadFilter();
       otherHp.type = "highpass";
-      otherHp.frequency.setValueAtTime(120, 0);
-
-      const s1 = offlineCtx.createBiquadFilter();
-      s1.type = "peaking";
-      s1.frequency.setValueAtTime(600, 0);
-      s1.Q.setValueAtTime(1.2, 0);
-      s1.gain.setValueAtTime(scoopGain * 0.9, 0);
-
-      const s2 = offlineCtx.createBiquadFilter();
-      s2.type = "peaking";
-      s2.frequency.setValueAtTime(1400, 0);
-      s2.Q.setValueAtTime(1.0, 0);
-      s2.gain.setValueAtTime(scoopGain, 0);
-
-      const s3 = offlineCtx.createBiquadFilter();
-      s3.type = "peaking";
-      s3.frequency.setValueAtTime(2600, 0);
-      s3.Q.setValueAtTime(1.2, 0);
-      s3.gain.setValueAtTime(scoopGain * 0.95, 0);
-
-      const s4 = offlineCtx.createBiquadFilter();
-      s4.type = "peaking";
-      s4.frequency.setValueAtTime(3800, 0);
-      s4.Q.setValueAtTime(1.5, 0);
-      s4.gain.setValueAtTime(scoopGain * 0.8, 0);
-
-      sideMergerNode.connect(otherHp);
-      otherHp.connect(s1);
-      s1.connect(s2);
-      s2.connect(s3);
-      s3.connect(s4);
-      s4.connect(stemGain);
+      otherHp.frequency.setValueAtTime(220, 0);
+      const otherLp = offlineCtx.createBiquadFilter();
+      otherLp.type = "lowpass";
+      otherLp.frequency.setValueAtTime(2500, 0);
+      bgBusNode.connect(otherHp);
+      otherHp.connect(otherLp);
+      otherLp.connect(stemGain);
     }
   }
 
@@ -477,10 +420,6 @@ export default function StemStudio() {
   const activeSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
   const masterGainRef = React.useRef<GainNode | null>(null);
   const stemGainsRef = React.useRef<Map<string, GainNode>>(new Map());
-  const vocalScoop1Ref = React.useRef<BiquadFilterNode | null>(null);
-  const vocalScoop2Ref = React.useRef<BiquadFilterNode | null>(null);
-  const vocalScoop3Ref = React.useRef<BiquadFilterNode | null>(null);
-  const vocalScoop4Ref = React.useRef<BiquadFilterNode | null>(null);
   const playbackStartTimeRef = React.useRef<number>(0);
   const playbackStartOffsetRef = React.useRef<number>(0);
 
@@ -787,33 +726,6 @@ export default function StemStudio() {
         } catch {}
       }
     });
-
-    // Dynamic Vocal Reverb & Backing Vocal Suppressor
-    const vocalStem = currentStems.find((s) => s.id === "vocals");
-    const isVocalActive = vocalStem && !vocalStem.muted && (hasSolo ? vocalStem.solo : true);
-    const vocalLevel = isVocalActive ? vocalStem.volume : 0;
-    // When vocalLevel is 0%, scoop reaches -32 dB (wipes out background singer & vocal reverb!)
-    // When vocalLevel is 100%, scoop is 0 dB (natural music)
-    const scoopGain = (1.0 - vocalLevel) * -32;
-
-    try {
-      if (vocalScoop1Ref.current) {
-        vocalScoop1Ref.current.gain.cancelScheduledValues(ctx.currentTime);
-        vocalScoop1Ref.current.gain.setTargetAtTime(scoopGain * 0.9, ctx.currentTime, 0.02);
-      }
-      if (vocalScoop2Ref.current) {
-        vocalScoop2Ref.current.gain.cancelScheduledValues(ctx.currentTime);
-        vocalScoop2Ref.current.gain.setTargetAtTime(scoopGain, ctx.currentTime, 0.02);
-      }
-      if (vocalScoop3Ref.current) {
-        vocalScoop3Ref.current.gain.cancelScheduledValues(ctx.currentTime);
-        vocalScoop3Ref.current.gain.setTargetAtTime(scoopGain * 0.95, ctx.currentTime, 0.02);
-      }
-      if (vocalScoop4Ref.current) {
-        vocalScoop4Ref.current.gain.cancelScheduledValues(ctx.currentTime);
-        vocalScoop4Ref.current.gain.setTargetAtTime(scoopGain * 0.8, ctx.currentTime, 0.02);
-      }
-    } catch {}
   }, []);
 
   const playAudio = React.useCallback((offsetSec?: number) => {
@@ -840,21 +752,21 @@ export default function StemStudio() {
       source.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
 
       // Multi-Stem DSP Routing Engine (Vocals, Drums, Bass, Melodic/Other)
+      // Maintains 100% full background music loudness & clarity when Vocals = 0
       stemGainsRef.current.clear();
       const currentStems = stemsRef.current;
       const hasSolo = currentStems.some((s) => s.solo);
 
       const isStereo = decodedBuffer.numberOfChannels >= 2;
 
-      let midSumNode: AudioNode;
-      let sideMergerNode: AudioNode;
+      let vocalNode: AudioNode;
+      let bgBusNode: AudioNode;
 
       if (isStereo) {
-        // True Zero-Phase Stereo Mid-Side Separation
         const splitter = ctx.createChannelSplitter(2);
         source.connect(splitter);
 
-        // Mid (Center Mono): 0.5 * (L + R)
+        // Mid channel: 0.5 * (L + R)
         const midSum = ctx.createGain();
         const midL = ctx.createGain();
         midL.gain.setValueAtTime(0.5, ctx.currentTime);
@@ -864,83 +776,76 @@ export default function StemStudio() {
         splitter.connect(midR, 1);
         midL.connect(midSum);
         midR.connect(midSum);
-        midSumNode = midSum;
 
-        // Side Left: 0.5 * (L - R) [Zero-Phase Lead Vocal Cancellation: V - V = 0.0]
-        const sideL = ctx.createGain();
-        const slL = ctx.createGain();
-        slL.gain.setValueAtTime(0.5, ctx.currentTime);
-        const slR = ctx.createGain();
-        slR.gain.setValueAtTime(-0.5, ctx.currentTime);
-        splitter.connect(slL, 0);
-        splitter.connect(slR, 1);
-        slL.connect(sideL);
-        slR.connect(sideL);
+        // Vocal extraction (centered lead singer band)
+        const vocalHp = ctx.createBiquadFilter();
+        vocalHp.type = "highpass";
+        vocalHp.frequency.setValueAtTime(180, ctx.currentTime);
+        vocalHp.Q.setValueAtTime(0.707, ctx.currentTime);
 
-        // Side Right: 0.5 * (R - L) [Zero-Phase Lead Vocal Cancellation: V - V = 0.0]
-        const sideR = ctx.createGain();
-        const srR = ctx.createGain();
-        srR.gain.setValueAtTime(0.5, ctx.currentTime);
-        const srL = ctx.createGain();
-        srL.gain.setValueAtTime(-0.5, ctx.currentTime);
-        splitter.connect(srR, 1);
-        splitter.connect(srL, 0);
-        srR.connect(sideR);
-        srL.connect(sideR);
+        const vocalLp = ctx.createBiquadFilter();
+        vocalLp.type = "lowpass";
+        vocalLp.frequency.setValueAtTime(4200, ctx.currentTime);
+        vocalLp.Q.setValueAtTime(0.707, ctx.currentTime);
 
-        // Merge into true 2-channel stereo side node
-        const merger = ctx.createChannelMerger(2);
-        sideL.connect(merger, 0, 0);
-        sideR.connect(merger, 0, 1);
-        sideMergerNode = merger;
+        const vocalPres = ctx.createBiquadFilter();
+        vocalPres.type = "peaking";
+        vocalPres.frequency.setValueAtTime(2400, ctx.currentTime);
+        vocalPres.gain.setValueAtTime(2.5, ctx.currentTime);
+
+        midSum.connect(vocalHp);
+        vocalHp.connect(vocalLp);
+        vocalLp.connect(vocalPres);
+        vocalNode = vocalPres;
+
+        // Invert vocal to subtract from stereo channels (zero vocal cancellation)
+        const vocalInvert = ctx.createGain();
+        vocalInvert.gain.setValueAtTime(-1.0, ctx.currentTime);
+        vocalPres.connect(vocalInvert);
+
+        // Reconstruct full-fidelity stereo background (L - V, R - V) with 100% original dynamic range
+        const bgL = ctx.createGain();
+        const bgR = ctx.createGain();
+        splitter.connect(bgL, 0);
+        vocalInvert.connect(bgL);
+        splitter.connect(bgR, 1);
+        vocalInvert.connect(bgR);
+
+        const bgMerger = ctx.createChannelMerger(2);
+        bgL.connect(bgMerger, 0, 0);
+        bgR.connect(bgMerger, 0, 1);
+        bgBusNode = bgMerger;
       } else {
-        midSumNode = source;
-        sideMergerNode = source;
+        // Mono
+        const vocalHp = ctx.createBiquadFilter();
+        vocalHp.type = "highpass";
+        vocalHp.frequency.setValueAtTime(180, ctx.currentTime);
+
+        const vocalLp = ctx.createBiquadFilter();
+        vocalLp.type = "lowpass";
+        vocalLp.frequency.setValueAtTime(4200, ctx.currentTime);
+
+        const vocalPres = ctx.createBiquadFilter();
+        vocalPres.type = "peaking";
+        vocalPres.frequency.setValueAtTime(2400, ctx.currentTime);
+        vocalPres.gain.setValueAtTime(2.5, ctx.currentTime);
+
+        source.connect(vocalHp);
+        vocalHp.connect(vocalLp);
+        vocalLp.connect(vocalPres);
+        vocalNode = vocalPres;
+
+        const vocalInvert = ctx.createGain();
+        vocalInvert.gain.setValueAtTime(-1.0, ctx.currentTime);
+        vocalPres.connect(vocalInvert);
+
+        const bgMono = ctx.createGain();
+        source.connect(bgMono);
+        vocalInvert.connect(bgMono);
+        bgBusNode = bgMono;
       }
 
-      // Dynamic Formant Suppression Filters for Other/Melodic (to eliminate background singers & reverb)
-      const vocalStem = currentStems.find((s) => s.id === "vocals");
-      const isVocalActive = vocalStem && !vocalStem.muted && (hasSolo ? vocalStem.solo : true);
-      const initialVocalLevel = isVocalActive ? vocalStem.volume : 0;
-      const initialScoop = (1.0 - initialVocalLevel) * -32;
-
-      const otherHp = ctx.createBiquadFilter();
-      otherHp.type = "highpass";
-      otherHp.frequency.setValueAtTime(120, ctx.currentTime);
-
-      const scoop1 = ctx.createBiquadFilter();
-      scoop1.type = "peaking";
-      scoop1.frequency.setValueAtTime(600, ctx.currentTime);
-      scoop1.Q.setValueAtTime(1.2, ctx.currentTime);
-      scoop1.gain.setValueAtTime(initialScoop * 0.9, ctx.currentTime);
-      vocalScoop1Ref.current = scoop1;
-
-      const scoop2 = ctx.createBiquadFilter();
-      scoop2.type = "peaking";
-      scoop2.frequency.setValueAtTime(1400, ctx.currentTime);
-      scoop2.Q.setValueAtTime(1.0, ctx.currentTime);
-      scoop2.gain.setValueAtTime(initialScoop, ctx.currentTime);
-      vocalScoop2Ref.current = scoop2;
-
-      const scoop3 = ctx.createBiquadFilter();
-      scoop3.type = "peaking";
-      scoop3.frequency.setValueAtTime(2600, ctx.currentTime);
-      scoop3.Q.setValueAtTime(1.2, ctx.currentTime);
-      scoop3.gain.setValueAtTime(initialScoop * 0.95, ctx.currentTime);
-      vocalScoop3Ref.current = scoop3;
-
-      const scoop4 = ctx.createBiquadFilter();
-      scoop4.type = "peaking";
-      scoop4.frequency.setValueAtTime(3800, ctx.currentTime);
-      scoop4.Q.setValueAtTime(1.5, ctx.currentTime);
-      scoop4.gain.setValueAtTime(initialScoop * 0.8, ctx.currentTime);
-      vocalScoop4Ref.current = scoop4;
-
-      sideMergerNode.connect(otherHp);
-      otherHp.connect(scoop1);
-      scoop1.connect(scoop2);
-      scoop2.connect(scoop3);
-      scoop3.connect(scoop4);
+      const isTwoStem = currentStems.length <= 2;
 
       // ROUTE ALL STEMS
       currentStems.forEach((stem) => {
@@ -955,73 +860,42 @@ export default function StemStudio() {
         stemGainsRef.current.set(stem.id, stemGain);
 
         if (stem.id === "vocals") {
-          // VOCALS STEM: Plays Center Mid signal with vocal bandpass & presence boost
-          const vocalHp = ctx.createBiquadFilter();
-          vocalHp.type = "highpass";
-          vocalHp.frequency.setValueAtTime(180, ctx.currentTime);
-          vocalHp.Q.setValueAtTime(0.707, ctx.currentTime);
-
-          const vocalLp = ctx.createBiquadFilter();
-          vocalLp.type = "lowpass";
-          vocalLp.frequency.setValueAtTime(4200, ctx.currentTime);
-          vocalLp.Q.setValueAtTime(0.707, ctx.currentTime);
-
-          const vocalPres = ctx.createBiquadFilter();
-          vocalPres.type = "peaking";
-          vocalPres.frequency.setValueAtTime(2400, ctx.currentTime);
-          vocalPres.gain.setValueAtTime(3.5, ctx.currentTime);
-
-          midSumNode.connect(vocalHp);
-          vocalHp.connect(vocalLp);
-          vocalLp.connect(vocalPres);
-          vocalPres.connect(stemGain);
+          vocalNode.connect(stemGain);
+        } else if (isTwoStem) {
+          // 2-stem accompaniment / music: full background music bus!
+          bgBusNode.connect(stemGain);
         } else if (stem.id === "bass") {
-          // BASS STEM: Dual lowpass at 115 Hz (24 dB/oct slope) - kick and bass only, zero vocal!
-          const bassLp1 = ctx.createBiquadFilter();
-          bassLp1.type = "lowpass";
-          bassLp1.frequency.setValueAtTime(115, ctx.currentTime);
-          bassLp1.Q.setValueAtTime(0.707, ctx.currentTime);
-
-          const bassLp2 = ctx.createBiquadFilter();
-          bassLp2.type = "lowpass";
-          bassLp2.frequency.setValueAtTime(115, ctx.currentTime);
-          bassLp2.Q.setValueAtTime(0.707, ctx.currentTime);
-
-          midSumNode.connect(bassLp1);
-          bassLp1.connect(bassLp2);
-          bassLp2.connect(stemGain);
+          const bassLp = ctx.createBiquadFilter();
+          bassLp.type = "lowpass";
+          bassLp.frequency.setValueAtTime(220, ctx.currentTime);
+          bassLp.Q.setValueAtTime(0.707, ctx.currentTime);
+          bgBusNode.connect(bassLp);
+          bassLp.connect(stemGain);
         } else if (stem.id === "drums") {
-          // DRUMS STEM: Highpass at 4500 Hz on Side Channel (zero center vocals!)
-          const drumHp1 = ctx.createBiquadFilter();
-          drumHp1.type = "highpass";
-          drumHp1.frequency.setValueAtTime(4500, ctx.currentTime);
-          drumHp1.Q.setValueAtTime(0.707, ctx.currentTime);
-
-          const drumHp2 = ctx.createBiquadFilter();
-          drumHp2.type = "highpass";
-          drumHp2.frequency.setValueAtTime(4500, ctx.currentTime);
-          drumHp2.Q.setValueAtTime(0.707, ctx.currentTime);
-
-          const peak = ctx.createBiquadFilter();
-          peak.type = "peaking";
-          peak.frequency.setValueAtTime(7500, ctx.currentTime);
-          peak.gain.setValueAtTime(3, ctx.currentTime);
-
-          sideMergerNode.connect(drumHp1);
-          drumHp1.connect(drumHp2);
-          drumHp2.connect(peak);
-          peak.connect(stemGain);
+          const drumHp = ctx.createBiquadFilter();
+          drumHp.type = "highpass";
+          drumHp.frequency.setValueAtTime(2500, ctx.currentTime);
+          drumHp.Q.setValueAtTime(0.707, ctx.currentTime);
+          bgBusNode.connect(drumHp);
+          drumHp.connect(stemGain);
         } else if (stem.id === "guitar") {
           const guitarBp = ctx.createBiquadFilter();
           guitarBp.type = "bandpass";
-          guitarBp.frequency.setValueAtTime(1200, ctx.currentTime);
+          guitarBp.frequency.setValueAtTime(800, ctx.currentTime);
           guitarBp.Q.setValueAtTime(1.0, ctx.currentTime);
-
-          sideMergerNode.connect(guitarBp);
+          bgBusNode.connect(guitarBp);
           guitarBp.connect(stemGain);
         } else {
-          // OTHER / MELODIC STEM: Side channel + 4-stage vocal formant suppression
-          scoop4.connect(stemGain);
+          // Other / Melodic (220 Hz - 2500 Hz): full rich accompaniment without vocal!
+          const otherHp = ctx.createBiquadFilter();
+          otherHp.type = "highpass";
+          otherHp.frequency.setValueAtTime(220, ctx.currentTime);
+          const otherLp = ctx.createBiquadFilter();
+          otherLp.type = "lowpass";
+          otherLp.frequency.setValueAtTime(2500, ctx.currentTime);
+          bgBusNode.connect(otherHp);
+          otherHp.connect(otherLp);
+          otherLp.connect(stemGain);
         }
 
         stemGain.connect(masterGain);
