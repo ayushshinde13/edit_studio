@@ -100,13 +100,14 @@ async function renderStemOffline(
   stemGain.gain.setValueAtTime(1.0, 0);
   stemGain.connect(offlineCtx.destination);
 
+  let vocalNode: AudioNode;
   let bgBusNode: AudioNode;
 
   if (isStereo) {
     const splitter = offlineCtx.createChannelSplitter(2);
     source.connect(splitter);
 
-    // Mid channel: 0.5 * (L + R)
+    // Center Mid channel: 0.5 * (L + R)
     const midSum = offlineCtx.createGain();
     const midL = offlineCtx.createGain();
     midL.gain.setValueAtTime(0.5, 0);
@@ -117,7 +118,7 @@ async function renderStemOffline(
     midL.connect(midSum);
     midR.connect(midSum);
 
-    // Vocal extraction (centered lead singer band)
+    // 1. Vocal Isolation (Acapella / Lead vocal extraction)
     const vHp = offlineCtx.createBiquadFilter();
     vHp.type = "highpass";
     vHp.frequency.setValueAtTime(180, 0);
@@ -131,28 +132,69 @@ async function renderStemOffline(
     const vPres = offlineCtx.createBiquadFilter();
     vPres.type = "peaking";
     vPres.frequency.setValueAtTime(2400, 0);
-    vPres.gain.setValueAtTime(2.5, 0);
+    vPres.gain.setValueAtTime(3.0, 0);
 
     midSum.connect(vHp);
     vHp.connect(vLp);
     vLp.connect(vPres);
+    vocalNode = vPres;
 
-    // Invert vocal to subtract from stereo channels (zero vocal in background)
-    const vInvert = offlineCtx.createGain();
-    vInvert.gain.setValueAtTime(-1.0, 0);
-    vPres.connect(vInvert);
+    // 2. Zero-Phase Center Cancellation for 100% vocal muting
+    // Side L = (L - R); Side R = (R - L) -> Center Vocal V - V = 0 identically
+    const invR = offlineCtx.createGain();
+    invR.gain.setValueAtTime(-1.0, 0);
+    splitter.connect(invR, 1);
 
-    // Reconstruct full-fidelity stereo background (L - V, R - V) with 100% original dynamic range
-    const bgL = offlineCtx.createGain();
-    const bgR = offlineCtx.createGain();
-    splitter.connect(bgL, 0);
-    vInvert.connect(bgL);
-    splitter.connect(bgR, 1);
-    vInvert.connect(bgR);
+    const sideL = offlineCtx.createGain();
+    splitter.connect(sideL, 0);
+    invR.connect(sideL);
+
+    const invL = offlineCtx.createGain();
+    invL.gain.setValueAtTime(-1.0, 0);
+    splitter.connect(invL, 0);
+
+    const sideR = offlineCtx.createGain();
+    splitter.connect(sideR, 1);
+    invL.connect(sideR);
+
+    // Boost side channels slightly (1.25x) to maintain equal loudness
+    const sideBoostL = offlineCtx.createGain();
+    sideBoostL.gain.setValueAtTime(1.25, 0);
+    sideL.connect(sideBoostL);
+
+    const sideBoostR = offlineCtx.createGain();
+    sideBoostR.gain.setValueAtTime(1.25, 0);
+    sideR.connect(sideBoostR);
+
+    // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+    const bassLp1 = offlineCtx.createBiquadFilter();
+    bassLp1.type = "lowpass";
+    bassLp1.frequency.setValueAtTime(140, 0);
+    bassLp1.Q.setValueAtTime(0.707, 0);
+
+    const bassLp2 = offlineCtx.createBiquadFilter();
+    bassLp2.type = "lowpass";
+    bassLp2.frequency.setValueAtTime(140, 0);
+    bassLp2.Q.setValueAtTime(0.707, 0);
+
+    midSum.connect(bassLp1);
+    bassLp1.connect(bassLp2);
+
+    const bassGain = offlineCtx.createGain();
+    bassGain.gain.setValueAtTime(1.0, 0);
+    bassLp2.connect(bassGain);
+
+    const finalBgL = offlineCtx.createGain();
+    sideBoostL.connect(finalBgL);
+    bassGain.connect(finalBgL);
+
+    const finalBgR = offlineCtx.createGain();
+    sideBoostR.connect(finalBgR);
+    bassGain.connect(finalBgR);
 
     const bgMerger = offlineCtx.createChannelMerger(2);
-    bgL.connect(bgMerger, 0, 0);
-    bgR.connect(bgMerger, 0, 1);
+    finalBgL.connect(bgMerger, 0, 0);
+    finalBgR.connect(bgMerger, 0, 1);
     bgBusNode = bgMerger;
 
     if (stemId === "vocals") {
@@ -171,19 +213,35 @@ async function renderStemOffline(
     const vPres = offlineCtx.createBiquadFilter();
     vPres.type = "peaking";
     vPres.frequency.setValueAtTime(2400, 0);
-    vPres.gain.setValueAtTime(2.5, 0);
+    vPres.gain.setValueAtTime(3.0, 0);
 
     source.connect(vHp);
     vHp.connect(vLp);
     vLp.connect(vPres);
+    vocalNode = vPres;
 
-    const vInvert = offlineCtx.createGain();
-    vInvert.gain.setValueAtTime(-1.0, 0);
-    vPres.connect(vInvert);
+    const monoLow = offlineCtx.createBiquadFilter();
+    monoLow.type = "lowpass";
+    monoLow.frequency.setValueAtTime(180, 0);
+
+    const monoHigh = offlineCtx.createBiquadFilter();
+    monoHigh.type = "highpass";
+    monoHigh.frequency.setValueAtTime(4200, 0);
+
+    const monoMidNotch = offlineCtx.createBiquadFilter();
+    monoMidNotch.type = "peaking";
+    monoMidNotch.frequency.setValueAtTime(2200, 0);
+    monoMidNotch.Q.setValueAtTime(0.6, 0);
+    monoMidNotch.gain.setValueAtTime(-28, 0);
 
     const bgMono = offlineCtx.createGain();
-    source.connect(bgMono);
-    vInvert.connect(bgMono);
+    source.connect(monoLow);
+    source.connect(monoHigh);
+    source.connect(monoMidNotch);
+
+    monoLow.connect(bgMono);
+    monoHigh.connect(bgMono);
+    monoMidNotch.connect(bgMono);
     bgBusNode = bgMono;
 
     if (stemId === "vocals") {
@@ -255,7 +313,7 @@ async function renderMixOffline(
     const splitter = offlineCtx.createChannelSplitter(2);
     source.connect(splitter);
 
-    // Mid channel: 0.5 * (L + R)
+    // Center Mid channel: 0.5 * (L + R)
     const midSum = offlineCtx.createGain();
     const midL = offlineCtx.createGain();
     midL.gain.setValueAtTime(0.5, 0);
@@ -266,7 +324,7 @@ async function renderMixOffline(
     midL.connect(midSum);
     midR.connect(midSum);
 
-    // Extract lead vocal band
+    // 1. Vocal Isolation (Acapella / Lead vocal extraction)
     const vHp = offlineCtx.createBiquadFilter();
     vHp.type = "highpass";
     vHp.frequency.setValueAtTime(180, 0);
@@ -280,32 +338,72 @@ async function renderMixOffline(
     const vPres = offlineCtx.createBiquadFilter();
     vPres.type = "peaking";
     vPres.frequency.setValueAtTime(2400, 0);
-    vPres.gain.setValueAtTime(2.5, 0);
+    vPres.gain.setValueAtTime(3.0, 0);
 
     midSum.connect(vHp);
     vHp.connect(vLp);
     vLp.connect(vPres);
     vocalNode = vPres;
 
-    // Invert vocal to subtract from stereo channels (zero vocal cancellation)
-    const vInvert = offlineCtx.createGain();
-    vInvert.gain.setValueAtTime(-1.0, 0);
-    vPres.connect(vInvert);
+    // 2. Zero-Phase Center Cancellation for 100% vocal muting
+    // Side L = (L - R); Side R = (R - L) -> Center Vocal V - V = 0 identically
+    const invR = offlineCtx.createGain();
+    invR.gain.setValueAtTime(-1.0, 0);
+    splitter.connect(invR, 1);
 
-    // Background music bus: 100% full stereo, original volume, 0 vocal
-    const bgL = offlineCtx.createGain();
-    const bgR = offlineCtx.createGain();
-    splitter.connect(bgL, 0);
-    vInvert.connect(bgL);
-    splitter.connect(bgR, 1);
-    vInvert.connect(bgR);
+    const sideL = offlineCtx.createGain();
+    splitter.connect(sideL, 0);
+    invR.connect(sideL);
+
+    const invL = offlineCtx.createGain();
+    invL.gain.setValueAtTime(-1.0, 0);
+    splitter.connect(invL, 0);
+
+    const sideR = offlineCtx.createGain();
+    splitter.connect(sideR, 1);
+    invL.connect(sideR);
+
+    // Boost side channels slightly (1.25x) to maintain equal loudness
+    const sideBoostL = offlineCtx.createGain();
+    sideBoostL.gain.setValueAtTime(1.25, 0);
+    sideL.connect(sideBoostL);
+
+    const sideBoostR = offlineCtx.createGain();
+    sideBoostR.gain.setValueAtTime(1.25, 0);
+    sideR.connect(sideBoostR);
+
+    // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+    const bassLp1 = offlineCtx.createBiquadFilter();
+    bassLp1.type = "lowpass";
+    bassLp1.frequency.setValueAtTime(140, 0);
+    bassLp1.Q.setValueAtTime(0.707, 0);
+
+    const bassLp2 = offlineCtx.createBiquadFilter();
+    bassLp2.type = "lowpass";
+    bassLp2.frequency.setValueAtTime(140, 0);
+    bassLp2.Q.setValueAtTime(0.707, 0);
+
+    midSum.connect(bassLp1);
+    bassLp1.connect(bassLp2);
+
+    const bassGain = offlineCtx.createGain();
+    bassGain.gain.setValueAtTime(1.0, 0);
+    bassLp2.connect(bassGain);
+
+    const finalBgL = offlineCtx.createGain();
+    sideBoostL.connect(finalBgL);
+    bassGain.connect(finalBgL);
+
+    const finalBgR = offlineCtx.createGain();
+    sideBoostR.connect(finalBgR);
+    bassGain.connect(finalBgR);
 
     const bgMerger = offlineCtx.createChannelMerger(2);
-    bgL.connect(bgMerger, 0, 0);
-    bgR.connect(bgMerger, 0, 1);
+    finalBgL.connect(bgMerger, 0, 0);
+    finalBgR.connect(bgMerger, 0, 1);
     bgBusNode = bgMerger;
   } else {
-    // Mono
+    // Mono audio support
     const vHp = offlineCtx.createBiquadFilter();
     vHp.type = "highpass";
     vHp.frequency.setValueAtTime(180, 0);
@@ -315,20 +413,35 @@ async function renderMixOffline(
     const vPres = offlineCtx.createBiquadFilter();
     vPres.type = "peaking";
     vPres.frequency.setValueAtTime(2400, 0);
-    vPres.gain.setValueAtTime(2.5, 0);
+    vPres.gain.setValueAtTime(3.0, 0);
 
     source.connect(vHp);
     vHp.connect(vLp);
     vLp.connect(vPres);
     vocalNode = vPres;
 
-    const vInvert = offlineCtx.createGain();
-    vInvert.gain.setValueAtTime(-1.0, 0);
-    vPres.connect(vInvert);
+    const monoLow = offlineCtx.createBiquadFilter();
+    monoLow.type = "lowpass";
+    monoLow.frequency.setValueAtTime(180, 0);
+
+    const monoHigh = offlineCtx.createBiquadFilter();
+    monoHigh.type = "highpass";
+    monoHigh.frequency.setValueAtTime(4200, 0);
+
+    const monoMidNotch = offlineCtx.createBiquadFilter();
+    monoMidNotch.type = "peaking";
+    monoMidNotch.frequency.setValueAtTime(2200, 0);
+    monoMidNotch.Q.setValueAtTime(0.6, 0);
+    monoMidNotch.gain.setValueAtTime(-28, 0);
 
     const bgMono = offlineCtx.createGain();
-    source.connect(bgMono);
-    vInvert.connect(bgMono);
+    source.connect(monoLow);
+    source.connect(monoHigh);
+    source.connect(monoMidNotch);
+
+    monoLow.connect(bgMono);
+    monoHigh.connect(bgMono);
+    monoMidNotch.connect(bgMono);
     bgBusNode = bgMono;
   }
 
@@ -766,7 +879,7 @@ export default function StemStudio() {
         const splitter = ctx.createChannelSplitter(2);
         source.connect(splitter);
 
-        // Mid channel: 0.5 * (L + R)
+        // Center Mid channel: 0.5 * (L + R)
         const midSum = ctx.createGain();
         const midL = ctx.createGain();
         midL.gain.setValueAtTime(0.5, ctx.currentTime);
@@ -777,7 +890,7 @@ export default function StemStudio() {
         midL.connect(midSum);
         midR.connect(midSum);
 
-        // Vocal extraction (centered lead singer band)
+        // 1. Vocal Isolation (Acapella / Lead vocal extraction)
         const vocalHp = ctx.createBiquadFilter();
         vocalHp.type = "highpass";
         vocalHp.frequency.setValueAtTime(180, ctx.currentTime);
@@ -791,32 +904,72 @@ export default function StemStudio() {
         const vocalPres = ctx.createBiquadFilter();
         vocalPres.type = "peaking";
         vocalPres.frequency.setValueAtTime(2400, ctx.currentTime);
-        vocalPres.gain.setValueAtTime(2.5, ctx.currentTime);
+        vocalPres.gain.setValueAtTime(3.0, ctx.currentTime);
 
         midSum.connect(vocalHp);
         vocalHp.connect(vocalLp);
         vocalLp.connect(vocalPres);
         vocalNode = vocalPres;
 
-        // Invert vocal to subtract from stereo channels (zero vocal cancellation)
-        const vocalInvert = ctx.createGain();
-        vocalInvert.gain.setValueAtTime(-1.0, ctx.currentTime);
-        vocalPres.connect(vocalInvert);
+        // 2. Zero-Phase Center Cancellation for 100% vocal muting
+        // Side L = (L - R); Side R = (R - L) -> Center Vocal V - V = 0 identically
+        const invR = ctx.createGain();
+        invR.gain.setValueAtTime(-1.0, ctx.currentTime);
+        splitter.connect(invR, 1);
 
-        // Reconstruct full-fidelity stereo background (L - V, R - V) with 100% original dynamic range
-        const bgL = ctx.createGain();
-        const bgR = ctx.createGain();
-        splitter.connect(bgL, 0);
-        vocalInvert.connect(bgL);
-        splitter.connect(bgR, 1);
-        vocalInvert.connect(bgR);
+        const sideL = ctx.createGain();
+        splitter.connect(sideL, 0);
+        invR.connect(sideL);
+
+        const invL = ctx.createGain();
+        invL.gain.setValueAtTime(-1.0, ctx.currentTime);
+        splitter.connect(invL, 0);
+
+        const sideR = ctx.createGain();
+        splitter.connect(sideR, 1);
+        invL.connect(sideR);
+
+        // Boost side channels slightly (1.25x) to maintain equal loudness
+        const sideBoostL = ctx.createGain();
+        sideBoostL.gain.setValueAtTime(1.25, ctx.currentTime);
+        sideL.connect(sideBoostL);
+
+        const sideBoostR = ctx.createGain();
+        sideBoostR.gain.setValueAtTime(1.25, ctx.currentTime);
+        sideR.connect(sideBoostR);
+
+        // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+        const bassLp1 = ctx.createBiquadFilter();
+        bassLp1.type = "lowpass";
+        bassLp1.frequency.setValueAtTime(140, ctx.currentTime);
+        bassLp1.Q.setValueAtTime(0.707, ctx.currentTime);
+
+        const bassLp2 = ctx.createBiquadFilter();
+        bassLp2.type = "lowpass";
+        bassLp2.frequency.setValueAtTime(140, ctx.currentTime);
+        bassLp2.Q.setValueAtTime(0.707, ctx.currentTime);
+
+        midSum.connect(bassLp1);
+        bassLp1.connect(bassLp2);
+
+        const bassGain = ctx.createGain();
+        bassGain.gain.setValueAtTime(1.0, ctx.currentTime);
+        bassLp2.connect(bassGain);
+
+        const finalBgL = ctx.createGain();
+        sideBoostL.connect(finalBgL);
+        bassGain.connect(finalBgL);
+
+        const finalBgR = ctx.createGain();
+        sideBoostR.connect(finalBgR);
+        bassGain.connect(finalBgR);
 
         const bgMerger = ctx.createChannelMerger(2);
-        bgL.connect(bgMerger, 0, 0);
-        bgR.connect(bgMerger, 0, 1);
+        finalBgL.connect(bgMerger, 0, 0);
+        finalBgR.connect(bgMerger, 0, 1);
         bgBusNode = bgMerger;
       } else {
-        // Mono
+        // Mono audio fallback
         const vocalHp = ctx.createBiquadFilter();
         vocalHp.type = "highpass";
         vocalHp.frequency.setValueAtTime(180, ctx.currentTime);
@@ -828,20 +981,35 @@ export default function StemStudio() {
         const vocalPres = ctx.createBiquadFilter();
         vocalPres.type = "peaking";
         vocalPres.frequency.setValueAtTime(2400, ctx.currentTime);
-        vocalPres.gain.setValueAtTime(2.5, ctx.currentTime);
+        vocalPres.gain.setValueAtTime(3.0, ctx.currentTime);
 
         source.connect(vocalHp);
         vocalHp.connect(vocalLp);
         vocalLp.connect(vocalPres);
         vocalNode = vocalPres;
 
-        const vocalInvert = ctx.createGain();
-        vocalInvert.gain.setValueAtTime(-1.0, ctx.currentTime);
-        vocalPres.connect(vocalInvert);
+        const monoLow = ctx.createBiquadFilter();
+        monoLow.type = "lowpass";
+        monoLow.frequency.setValueAtTime(180, ctx.currentTime);
+
+        const monoHigh = ctx.createBiquadFilter();
+        monoHigh.type = "highpass";
+        monoHigh.frequency.setValueAtTime(4200, ctx.currentTime);
+
+        const monoMidNotch = ctx.createBiquadFilter();
+        monoMidNotch.type = "peaking";
+        monoMidNotch.frequency.setValueAtTime(2200, ctx.currentTime);
+        monoMidNotch.Q.setValueAtTime(0.6, ctx.currentTime);
+        monoMidNotch.gain.setValueAtTime(-28, ctx.currentTime);
 
         const bgMono = ctx.createGain();
-        source.connect(bgMono);
-        vocalInvert.connect(bgMono);
+        source.connect(monoLow);
+        source.connect(monoHigh);
+        source.connect(monoMidNotch);
+
+        monoLow.connect(bgMono);
+        monoHigh.connect(bgMono);
+        monoMidNotch.connect(bgMono);
         bgBusNode = bgMono;
       }
 

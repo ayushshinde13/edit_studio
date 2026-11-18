@@ -54,6 +54,192 @@ interface AudioToolboxProps {
   toolName: string;
 }
 
+/**
+ * Offline rendering for vocal removal / karaoke export with 100% full background volume
+ */
+async function renderVocalRemoverOffline(
+  buffer: AudioBuffer,
+  vocalLevel: number,
+  musicLevel: number,
+  pitchSemitones = 0
+): Promise<AudioBuffer> {
+  const isStereo = buffer.numberOfChannels >= 2;
+  const offlineCtx = new OfflineAudioContext(
+    buffer.numberOfChannels,
+    buffer.length,
+    buffer.sampleRate
+  );
+
+  const source = offlineCtx.createBufferSource();
+  source.buffer = buffer;
+  if (pitchSemitones !== 0) {
+    const rate = Math.max(0.25, Math.min(4, Math.pow(2, pitchSemitones / 12)));
+    source.playbackRate.setValueAtTime(rate, 0);
+  }
+
+  const masterGain = offlineCtx.createGain();
+  masterGain.gain.setValueAtTime(1.0, 0);
+  masterGain.connect(offlineCtx.destination);
+
+  let vocalNode: AudioNode;
+  let bgBusNode: AudioNode;
+
+  if (isStereo) {
+    const splitter = offlineCtx.createChannelSplitter(2);
+    source.connect(splitter);
+
+    // Mid channel: 0.5 * (L + R)
+    const midSum = offlineCtx.createGain();
+    const midL = offlineCtx.createGain();
+    midL.gain.setValueAtTime(0.5, 0);
+    const midR = offlineCtx.createGain();
+    midR.gain.setValueAtTime(0.5, 0);
+    splitter.connect(midL, 0);
+    splitter.connect(midR, 1);
+    midL.connect(midSum);
+    midR.connect(midSum);
+
+    // 1. Vocal Isolation (Acapella / Lead vocal extraction)
+    const vHp = offlineCtx.createBiquadFilter();
+    vHp.type = "highpass";
+    vHp.frequency.setValueAtTime(180, 0);
+    vHp.Q.setValueAtTime(0.707, 0);
+
+    const vLp = offlineCtx.createBiquadFilter();
+    vLp.type = "lowpass";
+    vLp.frequency.setValueAtTime(4200, 0);
+    vLp.Q.setValueAtTime(0.707, 0);
+
+    const vPres = offlineCtx.createBiquadFilter();
+    vPres.type = "peaking";
+    vPres.frequency.setValueAtTime(2400, 0);
+    vPres.gain.setValueAtTime(3.0, 0);
+
+    midSum.connect(vHp);
+    vHp.connect(vLp);
+    vLp.connect(vPres);
+    vocalNode = vPres;
+
+    // 2. Zero-Phase Center Cancellation for 100% vocal muting
+    // Side L = (L - R); Side R = (R - L) -> Center Vocal V - V = 0 identically
+    const invR = offlineCtx.createGain();
+    invR.gain.setValueAtTime(-1.0, 0);
+    splitter.connect(invR, 1);
+
+    const sideL = offlineCtx.createGain();
+    splitter.connect(sideL, 0);
+    invR.connect(sideL);
+
+    const invL = offlineCtx.createGain();
+    invL.gain.setValueAtTime(-1.0, 0);
+    splitter.connect(invL, 0);
+
+    const sideR = offlineCtx.createGain();
+    splitter.connect(sideR, 1);
+    invL.connect(sideR);
+
+    // Boost side channels slightly (1.25x) to maintain equal loudness
+    const sideBoostL = offlineCtx.createGain();
+    sideBoostL.gain.setValueAtTime(1.25, 0);
+    sideL.connect(sideBoostL);
+
+    const sideBoostR = offlineCtx.createGain();
+    sideBoostR.gain.setValueAtTime(1.25, 0);
+    sideR.connect(sideBoostR);
+
+    // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+    const bassLp1 = offlineCtx.createBiquadFilter();
+    bassLp1.type = "lowpass";
+    bassLp1.frequency.setValueAtTime(140, 0);
+    bassLp1.Q.setValueAtTime(0.707, 0);
+
+    const bassLp2 = offlineCtx.createBiquadFilter();
+    bassLp2.type = "lowpass";
+    bassLp2.frequency.setValueAtTime(140, 0);
+    bassLp2.Q.setValueAtTime(0.707, 0);
+
+    midSum.connect(bassLp1);
+    bassLp1.connect(bassLp2);
+
+    const bassGain = offlineCtx.createGain();
+    bassGain.gain.setValueAtTime(1.0, 0);
+    bassLp2.connect(bassGain);
+
+    const finalBgL = offlineCtx.createGain();
+    sideBoostL.connect(finalBgL);
+    bassGain.connect(finalBgL);
+
+    const finalBgR = offlineCtx.createGain();
+    sideBoostR.connect(finalBgR);
+    bassGain.connect(finalBgR);
+
+    const bgMerger = offlineCtx.createChannelMerger(2);
+    finalBgL.connect(bgMerger, 0, 0);
+    finalBgR.connect(bgMerger, 0, 1);
+    bgBusNode = bgMerger;
+  } else {
+    // Mono audio fallback
+    const vHp = offlineCtx.createBiquadFilter();
+    vHp.type = "highpass";
+    vHp.frequency.setValueAtTime(180, 0);
+
+    const vLp = offlineCtx.createBiquadFilter();
+    vLp.type = "lowpass";
+    vLp.frequency.setValueAtTime(4200, 0);
+
+    const vPres = offlineCtx.createBiquadFilter();
+    vPres.type = "peaking";
+    vPres.frequency.setValueAtTime(2400, 0);
+    vPres.gain.setValueAtTime(3.0, 0);
+
+    source.connect(vHp);
+    vHp.connect(vLp);
+    vLp.connect(vPres);
+    vocalNode = vPres;
+
+    const monoLow = offlineCtx.createBiquadFilter();
+    monoLow.type = "lowpass";
+    monoLow.frequency.setValueAtTime(180, 0);
+
+    const monoHigh = offlineCtx.createBiquadFilter();
+    monoHigh.type = "highpass";
+    monoHigh.frequency.setValueAtTime(4200, 0);
+
+    const monoMidNotch = offlineCtx.createBiquadFilter();
+    monoMidNotch.type = "peaking";
+    monoMidNotch.frequency.setValueAtTime(2200, 0);
+    monoMidNotch.Q.setValueAtTime(0.6, 0);
+    monoMidNotch.gain.setValueAtTime(-28, 0);
+
+    const bgMono = offlineCtx.createGain();
+    source.connect(monoLow);
+    source.connect(monoHigh);
+    source.connect(monoMidNotch);
+
+    monoLow.connect(bgMono);
+    monoHigh.connect(bgMono);
+    monoMidNotch.connect(bgMono);
+    bgBusNode = bgMono;
+  }
+
+  if (vocalLevel > 0) {
+    const vGain = offlineCtx.createGain();
+    vGain.gain.setValueAtTime(vocalLevel, 0);
+    vocalNode.connect(vGain);
+    vGain.connect(masterGain);
+  }
+
+  if (musicLevel > 0) {
+    const mGain = offlineCtx.createGain();
+    mGain.gain.setValueAtTime(musicLevel, 0);
+    bgBusNode.connect(mGain);
+    mGain.connect(masterGain);
+  }
+
+  source.start(0);
+  return await offlineCtx.startRendering();
+}
+
 export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
   const searchParams = useSearchParams();
   const queryProjectId = searchParams.get("projectId");
@@ -93,6 +279,8 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
   }, [queryProjectId]);
 
   const activeSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
+  const vocalGainRef = React.useRef<GainNode | null>(null);
+  const musicGainRef = React.useRef<GainNode | null>(null);
   const playbackStartTimeRef = React.useRef<number>(0);
   const playbackStartOffsetRef = React.useRef<number>(0);
 
@@ -170,18 +358,195 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
 
   const playAudio = React.useCallback((offset = 0) => {
     if (!decodedBuffer) {
-      setIsPlaying(true);
       return;
     }
     stopAudio();
 
     try {
       const ctx = getAudioContext();
+      if (ctx.state === "suspended") {
+        ctx.resume();
+      }
+
       const source = ctx.createBufferSource();
       source.buffer = decodedBuffer;
-      source.connect(ctx.destination);
 
       const safeOffset = Math.max(0, Math.min(offset, decodedBuffer.duration - 0.05));
+
+      if (toolId === "vocal-remover") {
+        const isStereo = decodedBuffer.numberOfChannels >= 2;
+        const vVol = vocalMuted ? 0 : vocalVolume / 100;
+        const mVol = musicMuted ? 0 : musicVolume / 100;
+        const effectiveRate = Math.max(0.25, Math.min(4, Math.pow(2, pitchSemitones / 12)));
+        source.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
+
+        let vocalNode: AudioNode;
+        let bgBusNode: AudioNode;
+
+        if (isStereo) {
+          const splitter = ctx.createChannelSplitter(2);
+          source.connect(splitter);
+
+          // Center Mid channel: 0.5 * (L + R)
+          const midSum = ctx.createGain();
+          const midL = ctx.createGain();
+          midL.gain.setValueAtTime(0.5, ctx.currentTime);
+          const midR = ctx.createGain();
+          midR.gain.setValueAtTime(0.5, ctx.currentTime);
+          splitter.connect(midL, 0);
+          splitter.connect(midR, 1);
+          midL.connect(midSum);
+          midR.connect(midSum);
+
+          // 1. Vocal Isolation (Acapella / Lead vocal extraction)
+          const vHp = ctx.createBiquadFilter();
+          vHp.type = "highpass";
+          vHp.frequency.setValueAtTime(180, ctx.currentTime);
+          vHp.Q.setValueAtTime(0.707, ctx.currentTime);
+
+          const vLp = ctx.createBiquadFilter();
+          vLp.type = "lowpass";
+          vLp.frequency.setValueAtTime(4200, ctx.currentTime);
+          vLp.Q.setValueAtTime(0.707, ctx.currentTime);
+
+          const vPres = ctx.createBiquadFilter();
+          vPres.type = "peaking";
+          vPres.frequency.setValueAtTime(2400, ctx.currentTime);
+          vPres.gain.setValueAtTime(3.0, ctx.currentTime);
+
+          midSum.connect(vHp);
+          vHp.connect(vLp);
+          vLp.connect(vPres);
+          vocalNode = vPres;
+
+          // 2. Zero-Phase Center Cancellation for 100% vocal muting
+          // Side L = (L - R); Side R = (R - L) -> Center Vocal V - V = 0 identically
+          const invR = ctx.createGain();
+          invR.gain.setValueAtTime(-1.0, ctx.currentTime);
+          splitter.connect(invR, 1);
+
+          const sideL = ctx.createGain();
+          splitter.connect(sideL, 0);
+          invR.connect(sideL);
+
+          const invL = ctx.createGain();
+          invL.gain.setValueAtTime(-1.0, ctx.currentTime);
+          splitter.connect(invL, 0);
+
+          const sideR = ctx.createGain();
+          splitter.connect(sideR, 1);
+          invL.connect(sideR);
+
+          // Boost side channels slightly (1.25x) to maintain equal loudness
+          const sideBoostL = ctx.createGain();
+          sideBoostL.gain.setValueAtTime(1.25, ctx.currentTime);
+          sideL.connect(sideBoostL);
+
+          const sideBoostR = ctx.createGain();
+          sideBoostR.gain.setValueAtTime(1.25, ctx.currentTime);
+          sideR.connect(sideBoostR);
+
+          // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+          const bassLp1 = ctx.createBiquadFilter();
+          bassLp1.type = "lowpass";
+          bassLp1.frequency.setValueAtTime(140, ctx.currentTime);
+          bassLp1.Q.setValueAtTime(0.707, ctx.currentTime);
+
+          const bassLp2 = ctx.createBiquadFilter();
+          bassLp2.type = "lowpass";
+          bassLp2.frequency.setValueAtTime(140, ctx.currentTime);
+          bassLp2.Q.setValueAtTime(0.707, ctx.currentTime);
+
+          midSum.connect(bassLp1);
+          bassLp1.connect(bassLp2);
+
+          const bassGain = ctx.createGain();
+          bassGain.gain.setValueAtTime(1.0, ctx.currentTime);
+          bassLp2.connect(bassGain);
+
+          const finalBgL = ctx.createGain();
+          sideBoostL.connect(finalBgL);
+          bassGain.connect(finalBgL);
+
+          const finalBgR = ctx.createGain();
+          sideBoostR.connect(finalBgR);
+          bassGain.connect(finalBgR);
+
+          const bgMerger = ctx.createChannelMerger(2);
+          finalBgL.connect(bgMerger, 0, 0);
+          finalBgR.connect(bgMerger, 0, 1);
+          bgBusNode = bgMerger;
+        } else {
+          // Mono audio fallback
+          const vHp = ctx.createBiquadFilter();
+          vHp.type = "highpass";
+          vHp.frequency.setValueAtTime(180, ctx.currentTime);
+
+          const vLp = ctx.createBiquadFilter();
+          vLp.type = "lowpass";
+          vLp.frequency.setValueAtTime(4200, ctx.currentTime);
+
+          const vPres = ctx.createBiquadFilter();
+          vPres.type = "peaking";
+          vPres.frequency.setValueAtTime(2400, ctx.currentTime);
+          vPres.gain.setValueAtTime(3.0, ctx.currentTime);
+
+          source.connect(vHp);
+          vHp.connect(vLp);
+          vLp.connect(vPres);
+          vocalNode = vPres;
+
+          const monoLow = ctx.createBiquadFilter();
+          monoLow.type = "lowpass";
+          monoLow.frequency.setValueAtTime(180, ctx.currentTime);
+
+          const monoHigh = ctx.createBiquadFilter();
+          monoHigh.type = "highpass";
+          monoHigh.frequency.setValueAtTime(4200, ctx.currentTime);
+
+          const monoMidNotch = ctx.createBiquadFilter();
+          monoMidNotch.type = "peaking";
+          monoMidNotch.frequency.setValueAtTime(2200, ctx.currentTime);
+          monoMidNotch.Q.setValueAtTime(0.6, ctx.currentTime);
+          monoMidNotch.gain.setValueAtTime(-28, ctx.currentTime);
+
+          const bgMono = ctx.createGain();
+          source.connect(monoLow);
+          source.connect(monoHigh);
+          source.connect(monoMidNotch);
+
+          monoLow.connect(bgMono);
+          monoHigh.connect(bgMono);
+          monoMidNotch.connect(bgMono);
+          bgBusNode = bgMono;
+        }
+
+        // Vocal Gain Node
+        const vocalGain = ctx.createGain();
+        vocalGain.gain.setValueAtTime(vVol, ctx.currentTime);
+        vocalNode.connect(vocalGain);
+        vocalGain.connect(ctx.destination);
+        vocalGainRef.current = vocalGain;
+
+        // Music Gain Node
+        const musicGain = ctx.createGain();
+        musicGain.gain.setValueAtTime(mVol, ctx.currentTime);
+        bgBusNode.connect(musicGain);
+        musicGain.connect(ctx.destination);
+        musicGainRef.current = musicGain;
+      } else if (toolId === "speed") {
+        source.playbackRate.setValueAtTime(speedVal, ctx.currentTime);
+        source.connect(ctx.destination);
+      } else if (toolId === "volume") {
+        const gainNode = ctx.createGain();
+        const linearGain = Math.pow(10, gainDb / 20);
+        gainNode.gain.setValueAtTime(linearGain, ctx.currentTime);
+        source.connect(gainNode);
+        gainNode.connect(ctx.destination);
+      } else {
+        source.connect(ctx.destination);
+      }
+
       source.start(0, safeOffset);
       activeSourceRef.current = source;
       playbackStartTimeRef.current = ctx.currentTime;
@@ -193,46 +558,49 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
       setIsPlaying(true);
     } catch (e) {
       console.error("Playback error:", e);
-      setIsPlaying(true);
+      setIsPlaying(false);
     }
-  }, [decodedBuffer, stopAudio]);
+  }, [
+    decodedBuffer,
+    toolId,
+    vocalMuted,
+    vocalVolume,
+    musicMuted,
+    musicVolume,
+    pitchSemitones,
+    speedVal,
+    gainDb,
+    stopAudio,
+  ]);
 
   const togglePlayPause = React.useCallback(() => {
     if (isPlaying) {
       stopAudio();
     } else {
-      playAudio(currentTime >= duration ? 0 : currentTime);
+      const startAt = currentTime >= duration ? 0 : currentTime;
+      playAudio(startAt);
     }
   }, [isPlaying, currentTime, duration, playAudio, stopAudio]);
 
+  // Clean animation frame updates without stopping audio in cleanup
   React.useEffect(() => {
     let animId: number;
-    if (isPlaying) {
+    if (isPlaying && decodedBuffer) {
       const tick = () => {
         try {
-          if (decodedBuffer) {
-            const ctx = getAudioContext();
-            const elapsed = ctx.currentTime - playbackStartTimeRef.current;
-            const next = playbackStartOffsetRef.current + elapsed;
-            if (toolId === "cutter" && next >= trimEnd) {
-              stopAudio();
-              setCurrentTime(trimStart);
-              return;
-            } else if (next >= duration) {
-              stopAudio();
-              setCurrentTime(0);
-              return;
-            }
-            setCurrentTime(next);
-          } else {
-            setCurrentTime((prev) => {
-              if (prev >= duration) {
-                stopAudio();
-                return 0;
-              }
-              return prev + 0.05;
-            });
+          const ctx = getAudioContext();
+          const elapsed = ctx.currentTime - playbackStartTimeRef.current;
+          const next = playbackStartOffsetRef.current + elapsed;
+          if (toolId === "cutter" && next >= trimEnd) {
+            stopAudio();
+            setCurrentTime(trimStart);
+            return;
+          } else if (next >= duration) {
+            stopAudio();
+            setCurrentTime(0);
+            return;
           }
+          setCurrentTime(next);
           animId = requestAnimationFrame(tick);
         } catch {
           animId = requestAnimationFrame(tick);
@@ -242,65 +610,123 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
     }
     return () => {
       cancelAnimationFrame(animId);
-      if (!isPlaying) {
-        if (activeSourceRef.current) {
-          try {
-            activeSourceRef.current.stop();
-          } catch {}
-          activeSourceRef.current = null;
-        }
-      }
     };
   }, [isPlaying, duration, trimStart, trimEnd, toolId, decodedBuffer, stopAudio]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Component unmount cleanup
+  React.useEffect(() => {
+    return () => {
+      if (activeSourceRef.current) {
+        try {
+          activeSourceRef.current.stop();
+          activeSourceRef.current.disconnect();
+        } catch {}
+        activeSourceRef.current = null;
+      }
+    };
+  }, []);
+
+  // Live real-time volume faders for Vocal Remover while playing
+  React.useEffect(() => {
+    if (toolId === "vocal-remover") {
+      try {
+        const ctx = getAudioContext();
+        const vVol = vocalMuted ? 0 : vocalVolume / 100;
+        const mVol = musicMuted ? 0 : musicVolume / 100;
+        if (vocalGainRef.current) {
+          vocalGainRef.current.gain.cancelScheduledValues(ctx.currentTime);
+          vocalGainRef.current.gain.setTargetAtTime(vVol, ctx.currentTime, 0.015);
+        }
+        if (musicGainRef.current) {
+          musicGainRef.current.gain.cancelScheduledValues(ctx.currentTime);
+          musicGainRef.current.gain.setTargetAtTime(mVol, ctx.currentTime, 0.015);
+        }
+      } catch {}
+    }
+  }, [vocalMuted, vocalVolume, musicMuted, musicVolume, toolId]);
+
+  // Live real-time pitch transpose for Vocal Remover
+  React.useEffect(() => {
+    if (toolId === "vocal-remover" && activeSourceRef.current) {
+      try {
+        const ctx = getAudioContext();
+        const effectiveRate = Math.max(0.25, Math.min(4, Math.pow(2, pitchSemitones / 12)));
+        activeSourceRef.current.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
+      } catch {}
+    }
+  }, [pitchSemitones, toolId]);
+
+  // Live real-time speed update for Speed tool
+  React.useEffect(() => {
+    if (toolId === "speed" && activeSourceRef.current) {
+      try {
+        const ctx = getAudioContext();
+        activeSourceRef.current.playbackRate.setValueAtTime(speedVal, ctx.currentTime);
+      } catch {}
+    }
+  }, [speedVal, toolId]);
+
+  const processFile = async (f: File) => {
+    setFile(f);
+    stopAudio();
+    setIsDecoding(true);
+
+    try {
+      const buf = await decodeAudioFromFile(f);
+      setDecodedBuffer(buf);
+      setDuration(buf.duration);
+      setTrimStart(0);
+      setTrimEnd(buf.duration);
+      setCurrentTime(0);
+
+      // Auto-save session to IndexedDB
+      try {
+        const projId = `audio_${toolId}_${Date.now()}`;
+        await saveProject({
+          id: projId,
+          type: "audio_tool",
+          title: `${f.name.replace(/\.[^/.]+$/, "")} (${toolName})`,
+          updatedAt: Date.now(),
+          sizeBytes: f.size,
+          audioBlob: f,
+          audioFileName: f.name,
+          audioFileType: f.type,
+          state: {
+            toolId,
+            duration: buf.duration,
+            trimStart: 0,
+            trimEnd: buf.duration,
+          },
+        });
+      } catch (dbErr) {
+        console.error("Failed to auto-save audio session to IndexedDB:", dbErr);
+      }
+    } catch (err) {
+      console.warn("Direct file decoding notice:", err);
+    } finally {
+      setIsDecoding(false);
+    }
+
+    setIsSeparated(false);
+
+    if (toolId === "vocal-remover") {
+      startVocalSeparation();
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
-      setFile(f);
-      stopAudio();
-      setIsDecoding(true);
+      processFile(f);
+    }
+    e.target.value = "";
+  };
 
-      try {
-        const buf = await decodeAudioFromFile(f);
-        setDecodedBuffer(buf);
-        setDuration(buf.duration);
-        setTrimStart(0);
-        setTrimEnd(buf.duration);
-        setCurrentTime(0);
-
-        // Auto-save session to IndexedDB
-        try {
-          const projId = `audio_${toolId}_${Date.now()}`;
-          await saveProject({
-            id: projId,
-            type: "audio_tool",
-            title: `${f.name.replace(/\.[^/.]+$/, "")} (${toolName})`,
-            updatedAt: Date.now(),
-            sizeBytes: f.size,
-            audioBlob: f,
-            audioFileName: f.name,
-            audioFileType: f.type,
-            state: {
-              toolId,
-              duration: buf.duration,
-              trimStart: 0,
-              trimEnd: buf.duration,
-            },
-          });
-        } catch (dbErr) {
-          console.error("Failed to auto-save audio session to IndexedDB:", dbErr);
-        }
-      } catch (err) {
-        console.warn("Direct file decoding notice:", err);
-      } finally {
-        setIsDecoding(false);
-      }
-
-      setIsSeparated(false);
-
-      if (toolId === "vocal-remover") {
-        startVocalSeparation();
-      }
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files?.[0];
+    if (f) {
+      processFile(f);
     }
   };
 
@@ -415,24 +841,18 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
           }
           exportBuf = mergeAudioBuffers(mergeBuffers.length > 0 ? mergeBuffers : [sourceBuf]);
         } else if (toolId === "vocal-remover") {
-          const ctx = getAudioContext();
-          const numChannels = sourceBuf.numberOfChannels;
-          if (numChannels >= 2 && (customStem === "instrumental" || vocalMuted || vocalVolume === 0)) {
-            // Instrumental / Karaoke: Center-channel vocal reduction (L - R)
-            const outBuf = ctx.createBuffer(2, sourceBuf.length, sourceBuf.sampleRate);
-            const l = sourceBuf.getChannelData(0);
-            const r = sourceBuf.getChannelData(1);
-            const outL = outBuf.getChannelData(0);
-            const outR = outBuf.getChannelData(1);
-            for (let i = 0; i < sourceBuf.length; i++) {
-              const diff = (l[i] - r[i]) * 0.85;
-              outL[i] = diff;
-              outR[i] = diff;
-            }
-            exportBuf = outBuf;
-          } else {
-            exportBuf = sourceBuf;
+          let vLevel = vocalMuted || vocalVolume === 0 ? 0 : vocalVolume / 100;
+          let mLevel = musicMuted || musicVolume === 0 ? 0 : musicVolume / 100;
+
+          if (customStem === "instrumental") {
+            vLevel = 0;
+            mLevel = 1.0;
+          } else if (customStem === "vocal") {
+            vLevel = 1.0;
+            mLevel = 0;
           }
+
+          exportBuf = await renderVocalRemoverOffline(sourceBuf, vLevel, mLevel, pitchSemitones);
         } else {
           // video-to-audio, converter, compress, mix
           exportBuf = sourceBuf;
@@ -491,7 +911,11 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
       {/* File Upload Zone */}
       {toolId !== "blank" && toolId !== "merger" && (
         <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215]">
-          <label className="flex items-center justify-between p-3 rounded-[6px] border border-dashed border-[#d1d5db] dark:border-[#3f3f46] hover:border-[#fb6b6a] dark:hover:border-[#fb6b6a] bg-[#fbfbfb] dark:bg-[#18181c] cursor-pointer transition-colors">
+          <label
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+            className="flex items-center justify-between p-3 rounded-[6px] border border-dashed border-[#d1d5db] dark:border-[#3f3f46] hover:border-[#fb6b6a] dark:hover:border-[#fb6b6a] bg-[#fbfbfb] dark:bg-[#18181c] cursor-pointer transition-colors"
+          >
             <div className="flex items-center gap-3">
               <div className="h-7 w-7 rounded-[4px] bg-[#fb6b6a]/10 text-[#fb6b6a] flex items-center justify-center">
                 {toolId === "video-to-audio" ? (
