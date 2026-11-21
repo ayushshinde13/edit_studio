@@ -28,7 +28,16 @@ import {
   Plus,
   Trash2,
   Bookmark,
+  Copy,
+  Check,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  FileDown,
 } from "lucide-react";
+import { fetchSongLyrics, SyncedLyricLine } from "@/lib/audio/lyrics";
+import { downloadLyricsPdf } from "@/lib/audio/lyricsPdf";
 import { Button } from "@/design-system/primitives/button";
 import { Slider } from "@/design-system/primitives/slider";
 import { Badge } from "@/design-system/primitives/badge";
@@ -157,24 +166,31 @@ async function renderStemOffline(
     splitter.connect(sideR, 1);
     invL.connect(sideR);
 
-    // Boost side channels slightly (1.25x) to maintain equal loudness
-    const sideBoostL = offlineCtx.createGain();
-    sideBoostL.gain.setValueAtTime(1.25, 0);
-    sideL.connect(sideBoostL);
+    // Merge into 2-channel stereo side bus
+    const sideMerger = offlineCtx.createChannelMerger(2);
+    sideL.connect(sideMerger, 0, 0);
+    sideR.connect(sideMerger, 0, 1);
 
-    const sideBoostR = offlineCtx.createGain();
-    sideBoostR.gain.setValueAtTime(1.25, 0);
-    sideR.connect(sideBoostR);
+    // Highpass side channels at 50 Hz to cut DC rumble without cutting musical instruments & tunes
+    const sideHp = offlineCtx.createBiquadFilter();
+    sideHp.type = "highpass";
+    sideHp.frequency.setValueAtTime(50, 0);
+    sideHp.Q.setValueAtTime(0.707, 0);
 
-    // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+    const sideProcessed = offlineCtx.createGain();
+    sideProcessed.gain.setValueAtTime(1.15, 0);
+    sideMerger.connect(sideHp);
+    sideHp.connect(sideProcessed);
+
+    // 3. Bass Preservation below 85 Hz (kick drum & sub-bass where lead vocals do not exist)
     const bassLp1 = offlineCtx.createBiquadFilter();
     bassLp1.type = "lowpass";
-    bassLp1.frequency.setValueAtTime(140, 0);
+    bassLp1.frequency.setValueAtTime(85, 0);
     bassLp1.Q.setValueAtTime(0.707, 0);
 
     const bassLp2 = offlineCtx.createBiquadFilter();
     bassLp2.type = "lowpass";
-    bassLp2.frequency.setValueAtTime(140, 0);
+    bassLp2.frequency.setValueAtTime(85, 0);
     bassLp2.Q.setValueAtTime(0.707, 0);
 
     midSum.connect(bassLp1);
@@ -184,18 +200,10 @@ async function renderStemOffline(
     bassGain.gain.setValueAtTime(1.0, 0);
     bassLp2.connect(bassGain);
 
-    const finalBgL = offlineCtx.createGain();
-    sideBoostL.connect(finalBgL);
-    bassGain.connect(finalBgL);
-
-    const finalBgR = offlineCtx.createGain();
-    sideBoostR.connect(finalBgR);
-    bassGain.connect(finalBgR);
-
-    const bgMerger = offlineCtx.createChannelMerger(2);
-    finalBgL.connect(bgMerger, 0, 0);
-    finalBgR.connect(bgMerger, 0, 1);
-    bgBusNode = bgMerger;
+    const finalBgBus = offlineCtx.createGain();
+    sideProcessed.connect(finalBgBus);
+    bassGain.connect(finalBgBus);
+    bgBusNode = finalBgBus;
 
     if (stemId === "vocals") {
       vPres.connect(stemGain);
@@ -203,7 +211,7 @@ async function renderStemOffline(
       return await offlineCtx.startRendering();
     }
   } else {
-    // Mono audio support
+    // Mono audio support: preserve low bass + high cymbals, gentle mid notch for vocal
     const vHp = offlineCtx.createBiquadFilter();
     vHp.type = "highpass";
     vHp.frequency.setValueAtTime(180, 0);
@@ -222,26 +230,25 @@ async function renderStemOffline(
 
     const monoLow = offlineCtx.createBiquadFilter();
     monoLow.type = "lowpass";
-    monoLow.frequency.setValueAtTime(180, 0);
+    monoLow.frequency.setValueAtTime(140, 0);
 
     const monoHigh = offlineCtx.createBiquadFilter();
     monoHigh.type = "highpass";
-    monoHigh.frequency.setValueAtTime(4200, 0);
+    monoHigh.frequency.setValueAtTime(3800, 0);
 
-    const monoMidNotch = offlineCtx.createBiquadFilter();
-    monoMidNotch.type = "peaking";
-    monoMidNotch.frequency.setValueAtTime(2200, 0);
-    monoMidNotch.Q.setValueAtTime(0.6, 0);
-    monoMidNotch.gain.setValueAtTime(-28, 0);
+    const monoMid = offlineCtx.createBiquadFilter();
+    monoMid.type = "peaking";
+    monoMid.frequency.setValueAtTime(2200, 0);
+    monoMid.Q.setValueAtTime(0.8, 0);
+    monoMid.gain.setValueAtTime(-12, 0);
 
     const bgMono = offlineCtx.createGain();
     source.connect(monoLow);
     source.connect(monoHigh);
-    source.connect(monoMidNotch);
-
+    source.connect(monoMid);
     monoLow.connect(bgMono);
     monoHigh.connect(bgMono);
-    monoMidNotch.connect(bgMono);
+    monoMid.connect(bgMono);
     bgBusNode = bgMono;
 
     if (stemId === "vocals") {
@@ -363,24 +370,31 @@ async function renderMixOffline(
     splitter.connect(sideR, 1);
     invL.connect(sideR);
 
-    // Boost side channels slightly (1.25x) to maintain equal loudness
-    const sideBoostL = offlineCtx.createGain();
-    sideBoostL.gain.setValueAtTime(1.25, 0);
-    sideL.connect(sideBoostL);
+    // Merge into 2-channel stereo side bus
+    const sideMerger = offlineCtx.createChannelMerger(2);
+    sideL.connect(sideMerger, 0, 0);
+    sideR.connect(sideMerger, 0, 1);
 
-    const sideBoostR = offlineCtx.createGain();
-    sideBoostR.gain.setValueAtTime(1.25, 0);
-    sideR.connect(sideBoostR);
+    // Highpass side channels at 50 Hz to cut DC rumble without cutting musical instruments & tunes
+    const sideHp = offlineCtx.createBiquadFilter();
+    sideHp.type = "highpass";
+    sideHp.frequency.setValueAtTime(50, 0);
+    sideHp.Q.setValueAtTime(0.707, 0);
 
-    // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+    const sideProcessed = offlineCtx.createGain();
+    sideProcessed.gain.setValueAtTime(1.15, 0);
+    sideMerger.connect(sideHp);
+    sideHp.connect(sideProcessed);
+
+    // 3. Bass Preservation below 85 Hz (kick drum & sub-bass where lead vocals do not exist)
     const bassLp1 = offlineCtx.createBiquadFilter();
     bassLp1.type = "lowpass";
-    bassLp1.frequency.setValueAtTime(140, 0);
+    bassLp1.frequency.setValueAtTime(85, 0);
     bassLp1.Q.setValueAtTime(0.707, 0);
 
     const bassLp2 = offlineCtx.createBiquadFilter();
     bassLp2.type = "lowpass";
-    bassLp2.frequency.setValueAtTime(140, 0);
+    bassLp2.frequency.setValueAtTime(85, 0);
     bassLp2.Q.setValueAtTime(0.707, 0);
 
     midSum.connect(bassLp1);
@@ -390,20 +404,12 @@ async function renderMixOffline(
     bassGain.gain.setValueAtTime(1.0, 0);
     bassLp2.connect(bassGain);
 
-    const finalBgL = offlineCtx.createGain();
-    sideBoostL.connect(finalBgL);
-    bassGain.connect(finalBgL);
-
-    const finalBgR = offlineCtx.createGain();
-    sideBoostR.connect(finalBgR);
-    bassGain.connect(finalBgR);
-
-    const bgMerger = offlineCtx.createChannelMerger(2);
-    finalBgL.connect(bgMerger, 0, 0);
-    finalBgR.connect(bgMerger, 0, 1);
-    bgBusNode = bgMerger;
+    const finalBgBus = offlineCtx.createGain();
+    sideProcessed.connect(finalBgBus);
+    bassGain.connect(finalBgBus);
+    bgBusNode = finalBgBus;
   } else {
-    // Mono audio support
+    // Mono audio support: preserve low bass + high cymbals, gentle mid notch for vocal
     const vHp = offlineCtx.createBiquadFilter();
     vHp.type = "highpass";
     vHp.frequency.setValueAtTime(180, 0);
@@ -420,28 +426,30 @@ async function renderMixOffline(
     vLp.connect(vPres);
     vocalNode = vPres;
 
+    const vocalStem = activeStems.find((s) => s.id === "vocals");
+    const vLevel = vocalStem ? vocalStem.volume : 0;
+
     const monoLow = offlineCtx.createBiquadFilter();
     monoLow.type = "lowpass";
-    monoLow.frequency.setValueAtTime(180, 0);
+    monoLow.frequency.setValueAtTime(140, 0);
 
     const monoHigh = offlineCtx.createBiquadFilter();
     monoHigh.type = "highpass";
-    monoHigh.frequency.setValueAtTime(4200, 0);
+    monoHigh.frequency.setValueAtTime(3800, 0);
 
-    const monoMidNotch = offlineCtx.createBiquadFilter();
-    monoMidNotch.type = "peaking";
-    monoMidNotch.frequency.setValueAtTime(2200, 0);
-    monoMidNotch.Q.setValueAtTime(0.6, 0);
-    monoMidNotch.gain.setValueAtTime(-28, 0);
+    const monoMid = offlineCtx.createBiquadFilter();
+    monoMid.type = "peaking";
+    monoMid.frequency.setValueAtTime(2200, 0);
+    monoMid.Q.setValueAtTime(0.8, 0);
+    monoMid.gain.setValueAtTime(vLevel > 0 ? 0 : -12, 0);
 
     const bgMono = offlineCtx.createGain();
     source.connect(monoLow);
     source.connect(monoHigh);
-    source.connect(monoMidNotch);
-
+    source.connect(monoMid);
     monoLow.connect(bgMono);
     monoHigh.connect(bgMono);
-    monoMidNotch.connect(bgMono);
+    monoMid.connect(bgMono);
     bgBusNode = bgMono;
   }
 
@@ -570,10 +578,40 @@ export default function StemStudio() {
   ]);
 
   // Lyrics and Manual Project Notes (PRD M9)
-  const [songNotes, setSongNotes] = React.useState<string>(
-    "[Intro]\n(Acoustic guitar arpeggio)\n\n[Verse 1]\nLost in the rhythm of the city lights\nCounting down the seconds through the quiet nights\n\n[Chorus]\nTake me back to where the music began\nEvery beat in harmony, holding my hand"
-  );
-  const [showLyricsPanel, setShowLyricsPanel] = React.useState(false);
+  const [songNotes, setSongNotes] = React.useState<string>("");
+  const [showLyricsPanel, setShowLyricsPanel] = React.useState(true);
+  const [lyricsCopied, setLyricsCopied] = React.useState(false);
+  const [isFetchingLyrics, setIsFetchingLyrics] = React.useState(false);
+  const [lyricsSearchInput, setLyricsSearchInput] = React.useState("");
+  const [syncedLyrics, setSyncedLyrics] = React.useState<SyncedLyricLine[]>([]);
+  const [lyricsTrackInfo, setLyricsTrackInfo] = React.useState<{ title: string; artist: string } | null>(null);
+  const [lyricsMode, setLyricsMode] = React.useState<"karaoke" | "edit">("karaoke");
+  const [lyricsNotFoundNotice, setLyricsNotFoundNotice] = React.useState(false);
+  const [isExportingPdf, setIsExportingPdf] = React.useState(false);
+
+  const handleLyricsSearch = React.useCallback(async (queryOverride?: string) => {
+    const q = (queryOverride !== undefined ? queryOverride : lyricsSearchInput) || (file ? file.name : "");
+    if (!q || !q.trim()) return;
+    setIsFetchingLyrics(true);
+    setLyricsNotFoundNotice(false);
+    try {
+      const result = await fetchSongLyrics(q);
+      if (result) {
+        setSongNotes(result.plainLyrics);
+        setSyncedLyrics(result.lines);
+        setLyricsTrackInfo({ title: result.trackName, artist: result.artistName });
+        setShowLyricsPanel(true);
+        setLyricsNotFoundNotice(false);
+      } else {
+        setLyricsNotFoundNotice(true);
+      }
+    } catch (e) {
+      console.warn("Lyrics search notice:", e);
+      setLyricsNotFoundNotice(true);
+    } finally {
+      setIsFetchingLyrics(false);
+    }
+  }, [file, lyricsSearchInput]);
 
   // Detected Chords
   const [detectedChords, setDetectedChords] = React.useState<ChordItem[]>([
@@ -730,7 +768,11 @@ export default function StemStudio() {
               }))
             );
           }
-          if (saved.state.notes) setSongNotes(saved.state.notes);
+          if (saved.state.notes && !saved.state.notes.includes("Lost in the rhythm")) {
+            setSongNotes(saved.state.notes);
+          } else {
+            setSongNotes("");
+          }
           if (saved.state.stemMode) setStemMode(saved.state.stemMode);
           if (saved.state.bpm) setBpm(saved.state.bpm);
           if (saved.state.hasSeparated) setHasSeparated(true);
@@ -766,6 +808,10 @@ export default function StemStudio() {
           if (isMounted) {
             setDecodedBuffer(buf);
             setDuration(buf.duration);
+            setLyricsSearchInput(reconstructedFile.name.replace(/\.[^/.]+$/, ""));
+            if (!saved.state?.notes || saved.state.notes.includes("Lost in the rhythm")) {
+              handleLyricsSearch(reconstructedFile.name);
+            }
             if (!saved.state?.waveformPeaks || saved.state.waveformPeaks.length !== 64) {
               const channel = buf.getChannelData(0);
               const blockSize = Math.floor(channel.length / 64);
@@ -929,24 +975,31 @@ export default function StemStudio() {
         splitter.connect(sideR, 1);
         invL.connect(sideR);
 
-        // Boost side channels slightly (1.25x) to maintain equal loudness
-        const sideBoostL = ctx.createGain();
-        sideBoostL.gain.setValueAtTime(1.25, ctx.currentTime);
-        sideL.connect(sideBoostL);
+        // Merge into 2-channel stereo side bus
+        const sideMerger = ctx.createChannelMerger(2);
+        sideL.connect(sideMerger, 0, 0);
+        sideR.connect(sideMerger, 0, 1);
 
-        const sideBoostR = ctx.createGain();
-        sideBoostR.gain.setValueAtTime(1.25, ctx.currentTime);
-        sideR.connect(sideBoostR);
+        // Highpass side channels at 50 Hz to cut DC rumble without touching musical instruments & tunes
+        const sideHp = ctx.createBiquadFilter();
+        sideHp.type = "highpass";
+        sideHp.frequency.setValueAtTime(50, ctx.currentTime);
+        sideHp.Q.setValueAtTime(0.707, ctx.currentTime);
 
-        // 3. Bass Preservation below 140 Hz (kick drum & bassline where vocals do not exist)
+        const sideProcessed = ctx.createGain();
+        sideProcessed.gain.setValueAtTime(1.15, ctx.currentTime);
+        sideMerger.connect(sideHp);
+        sideHp.connect(sideProcessed);
+
+        // 3. Bass Preservation below 85 Hz (kick drum & sub-bass where lead vocals do not exist)
         const bassLp1 = ctx.createBiquadFilter();
         bassLp1.type = "lowpass";
-        bassLp1.frequency.setValueAtTime(140, ctx.currentTime);
+        bassLp1.frequency.setValueAtTime(85, ctx.currentTime);
         bassLp1.Q.setValueAtTime(0.707, ctx.currentTime);
 
         const bassLp2 = ctx.createBiquadFilter();
         bassLp2.type = "lowpass";
-        bassLp2.frequency.setValueAtTime(140, ctx.currentTime);
+        bassLp2.frequency.setValueAtTime(85, ctx.currentTime);
         bassLp2.Q.setValueAtTime(0.707, ctx.currentTime);
 
         midSum.connect(bassLp1);
@@ -956,20 +1009,12 @@ export default function StemStudio() {
         bassGain.gain.setValueAtTime(1.0, ctx.currentTime);
         bassLp2.connect(bassGain);
 
-        const finalBgL = ctx.createGain();
-        sideBoostL.connect(finalBgL);
-        bassGain.connect(finalBgL);
-
-        const finalBgR = ctx.createGain();
-        sideBoostR.connect(finalBgR);
-        bassGain.connect(finalBgR);
-
-        const bgMerger = ctx.createChannelMerger(2);
-        finalBgL.connect(bgMerger, 0, 0);
-        finalBgR.connect(bgMerger, 0, 1);
-        bgBusNode = bgMerger;
+        const finalBgBus = ctx.createGain();
+        sideProcessed.connect(finalBgBus);
+        bassGain.connect(finalBgBus);
+        bgBusNode = finalBgBus;
       } else {
-        // Mono audio fallback
+        // Mono audio fallback: preserve low bass + high cymbals, gentle mid notch for vocal
         const vocalHp = ctx.createBiquadFilter();
         vocalHp.type = "highpass";
         vocalHp.frequency.setValueAtTime(180, ctx.currentTime);
@@ -988,28 +1033,31 @@ export default function StemStudio() {
         vocalLp.connect(vocalPres);
         vocalNode = vocalPres;
 
+        const vocalStem = currentStems.find((s) => s.id === "vocals");
+        const isVocalActive = vocalStem && !vocalStem.muted && (hasSolo ? vocalStem.solo : true);
+        const vocalLevel = isVocalActive ? vocalStem.volume : 0;
+
         const monoLow = ctx.createBiquadFilter();
         monoLow.type = "lowpass";
-        monoLow.frequency.setValueAtTime(180, ctx.currentTime);
+        monoLow.frequency.setValueAtTime(140, ctx.currentTime);
 
         const monoHigh = ctx.createBiquadFilter();
         monoHigh.type = "highpass";
-        monoHigh.frequency.setValueAtTime(4200, ctx.currentTime);
+        monoHigh.frequency.setValueAtTime(3800, ctx.currentTime);
 
-        const monoMidNotch = ctx.createBiquadFilter();
-        monoMidNotch.type = "peaking";
-        monoMidNotch.frequency.setValueAtTime(2200, ctx.currentTime);
-        monoMidNotch.Q.setValueAtTime(0.6, ctx.currentTime);
-        monoMidNotch.gain.setValueAtTime(-28, ctx.currentTime);
+        const monoMid = ctx.createBiquadFilter();
+        monoMid.type = "peaking";
+        monoMid.frequency.setValueAtTime(2200, ctx.currentTime);
+        monoMid.Q.setValueAtTime(0.8, ctx.currentTime);
+        monoMid.gain.setValueAtTime(vocalLevel > 0 ? 0 : -12, ctx.currentTime);
 
         const bgMono = ctx.createGain();
         source.connect(monoLow);
         source.connect(monoHigh);
-        source.connect(monoMidNotch);
-
+        source.connect(monoMid);
         monoLow.connect(bgMono);
         monoHigh.connect(bgMono);
-        monoMidNotch.connect(bgMono);
+        monoMid.connect(bgMono);
         bgBusNode = bgMono;
       }
 
@@ -1281,6 +1329,8 @@ export default function StemStudio() {
         setDecodedBuffer(buf);
         setDuration(buf.duration);
         setCurrentTime(0);
+        setLyricsSearchInput(f.name.replace(/\.[^/.]+$/, ""));
+        handleLyricsSearch(f.name);
 
         // Extract 64 real normalized waveform peaks from the uploaded audio track
         const channel = buf.getChannelData(0);
@@ -2182,38 +2232,263 @@ export default function StemStudio() {
             </div>
           </Card>
 
-          {/* Song Notes & Rehearsal Lyrics (PRD Section 5.1 M9) */}
-          <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] space-y-2.5">
+          {/* Song Notes & Rehearsal Lyrics (PRD Section 5.1 M9 & Live Karaoke Sync) */}
+          <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] space-y-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-[#111827] dark:text-[#f4f4f5] flex items-center gap-1.5">
-                <FileText className="h-3.5 w-3.5 text-[#fb6b6a]" />
-                Song Notes & Lyrics
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-[#111827] dark:text-[#f4f4f5] flex items-center gap-1.5">
+                  <FileText className="h-4 w-4 text-[#fb6b6a]" />
+                  Song Notes & Lyrics
+                </span>
+                {lyricsTrackInfo && (
+                  <span className="hidden sm:inline-flex text-[10px] font-mono text-[#fb6b6a] border border-[#fb6b6a]/30 bg-[#fb6b6a]/10 px-2 py-0.5 rounded-[3px]">
+                    {lyricsTrackInfo.title} {lyricsTrackInfo.artist ? `• ${lyricsTrackInfo.artist}` : ""}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {showLyricsPanel && syncedLyrics.length > 0 && (
+                  <div className="flex rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] p-0.5 bg-[#fbfbfb] dark:bg-[#18181c]">
+                    <button
+                      type="button"
+                      onClick={() => setLyricsMode("karaoke")}
+                      className={`px-2 py-0.5 text-[10px] font-mono rounded-[3px] transition-colors cursor-pointer ${
+                        lyricsMode === "karaoke"
+                          ? "bg-[#fb6b6a] text-white"
+                          : "text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a]"
+                      }`}
+                    >
+                      Karaoke Sync
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLyricsMode("edit")}
+                      className={`px-2 py-0.5 text-[10px] font-mono rounded-[3px] transition-colors cursor-pointer ${
+                        lyricsMode === "edit"
+                          ? "bg-[#fb6b6a] text-white"
+                          : "text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a]"
+                      }`}
+                    >
+                      Full / Edit
+                    </button>
+                  </div>
+                )}
+                {showLyricsPanel && (songNotes || syncedLyrics.length > 0) && (
+                  <button
+                    type="button"
+                    disabled={isExportingPdf}
+                    onClick={async () => {
+                      const content = songNotes || syncedLyrics.map((l) => l.text).join("\n");
+                      if (!content) return;
+                      setIsExportingPdf(true);
+                      try {
+                        await downloadLyricsPdf({
+                          title: lyricsTrackInfo?.title || file?.name || "Song Lyrics",
+                          artist: lyricsTrackInfo?.artist || "",
+                          lyrics: content,
+                          syncedLyrics,
+                          includeTimestamps: lyricsMode === "karaoke" && syncedLyrics.length > 0,
+                        });
+                      } finally {
+                        setIsExportingPdf(false);
+                      }
+                    }}
+                    className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono rounded-[3px] border border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] text-[#6b7280] dark:text-[#a1a1aa] hover:border-[#fb6b6a] hover:text-[#fb6b6a] transition-colors cursor-pointer disabled:opacity-50"
+                    title="Download printable PDF of lyrics"
+                  >
+                    {isExportingPdf ? (
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    ) : (
+                      <FileDown className="h-2.5 w-2.5 text-[#fb6b6a]" />
+                    )}
+                    <span>PDF</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowLyricsPanel(!showLyricsPanel)}
+                  className="flex items-center gap-1 text-[11px] text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a] transition-colors cursor-pointer"
+                >
+                  {showLyricsPanel ? (
+                    <>
+                      <span>Collapse</span>
+                      <ChevronUp className="h-3 w-3" />
+                    </>
+                  ) : (
+                    <>
+                      <span>Expand</span>
+                      <ChevronDown className="h-3 w-3" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Online Lyrics Search Bar */}
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#6b7280] dark:text-[#a1a1aa]" />
+                <input
+                  type="text"
+                  value={lyricsSearchInput}
+                  onChange={(e) => {
+                    setLyricsSearchInput(e.target.value);
+                    if (lyricsNotFoundNotice) setLyricsNotFoundNotice(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleLyricsSearch();
+                    }
+                  }}
+                  placeholder="Search song title or artist for real lyrics (e.g. Kesariya, Shape of You, Tum Hi Ho)..."
+                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] text-[#111827] dark:text-[#f4f4f5] focus:outline-none focus:border-[#fb6b6a]"
+                />
+              </div>
               <button
                 type="button"
-                onClick={() => setShowLyricsPanel(!showLyricsPanel)}
-                className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a] transition-colors"
+                onClick={() => handleLyricsSearch()}
+                disabled={isFetchingLyrics}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-[4px] bg-[#fb6b6a] text-white text-xs hover:bg-[#ea5857] transition-colors disabled:opacity-50 whitespace-nowrap cursor-pointer"
               >
-                {showLyricsPanel ? "Collapse" : "Expand"}
+                {isFetchingLyrics ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Searching...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-3 w-3" />
+                    Fetch Lyrics
+                  </>
+                )}
               </button>
             </div>
 
+            {lyricsNotFoundNotice && (
+              <div className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-[4px] flex items-center justify-between">
+                <span>No online lyrics found for &quot;{lyricsSearchInput || file?.name}&quot;. Try typing the exact song title and artist above, or paste lyrics manually below.</span>
+                <button
+                  type="button"
+                  onClick={() => setLyricsNotFoundNotice(false)}
+                  className="text-amber-600 dark:text-amber-400 hover:opacity-75 text-xs ml-2"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             {showLyricsPanel ? (
               <div className="space-y-2">
-                <textarea
-                  value={songNotes}
-                  onChange={(e) => setSongNotes(e.target.value)}
-                  placeholder="Paste song lyrics, chords, or rehearsal notes here..."
-                  rows={6}
-                  className="w-full text-xs font-mono p-2 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] text-[#111827] dark:text-[#f4f4f5] focus:outline-none focus:border-[#fb6b6a] resize-y"
-                />
-                <span className="block text-[10px] text-[#6b7280] dark:text-[#a1a1aa]">
-                  Notes are stored with your project in IndexedDB and cloud backup.
-                </span>
+                {lyricsMode === "karaoke" && syncedLyrics.length > 0 ? (
+                  <div className="max-h-60 overflow-y-auto space-y-1 p-2 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c]">
+                    {syncedLyrics.map((line, idx) => {
+                      const nextTime = syncedLyrics[idx + 1]?.time ?? Infinity;
+                      const isActive = currentTime >= line.time && currentTime < nextTime;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            seekTo(line.time);
+                            if (!isPlaying) {
+                              playAudio(line.time);
+                            }
+                          }}
+                          className={`px-2.5 py-1.5 rounded-[4px] cursor-pointer transition-all text-xs flex items-center justify-between ${
+                            isActive
+                              ? "bg-[#fb6b6a]/15 text-[#fb6b6a] font-bold text-sm scale-[1.01] border-l-2 border-[#fb6b6a]"
+                              : "text-[#6b7280] dark:text-[#a1a1aa] hover:bg-[#fb6b6a]/5 hover:text-[#111827] dark:hover:text-[#f4f4f5]"
+                          }`}
+                        >
+                          <span>{line.text}</span>
+                          <span className="font-mono text-[10px] opacity-60 ml-2 shrink-0">{formatTime(line.time)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <textarea
+                    value={songNotes}
+                    onChange={(e) => setSongNotes(e.target.value)}
+                    placeholder="Real song lyrics will appear here automatically, or paste your chords and rehearsal notes..."
+                    rows={7}
+                    className="w-full text-xs font-mono p-2.5 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] text-[#111827] dark:text-[#f4f4f5] focus:outline-none focus:border-[#fb6b6a] resize-y leading-relaxed"
+                  />
+                )}
+                <div className="flex items-center justify-between text-[10px] text-[#6b7280] dark:text-[#a1a1aa] pt-1">
+                  <span>
+                    {syncedLyrics.length > 0
+                      ? `${syncedLyrics.length} synchronized lines • tap line to jump`
+                      : "Persisted offline in browser IndexedDB."}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isExportingPdf || (!songNotes && syncedLyrics.length === 0)}
+                      onClick={async () => {
+                        const content = songNotes || syncedLyrics.map((l) => l.text).join("\n");
+                        if (!content) return;
+                        setIsExportingPdf(true);
+                        try {
+                          await downloadLyricsPdf({
+                            title: lyricsTrackInfo?.title || file?.name || "Song Lyrics",
+                            artist: lyricsTrackInfo?.artist || "",
+                            lyrics: content,
+                            syncedLyrics,
+                            includeTimestamps: lyricsMode === "karaoke" && syncedLyrics.length > 0,
+                          });
+                        } finally {
+                          setIsExportingPdf(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] text-[10px] text-[#6b7280] dark:text-[#a1a1aa] hover:border-[#fb6b6a] hover:text-[#fb6b6a] transition-colors cursor-pointer disabled:opacity-40"
+                      title="Download formatted printable PDF of these lyrics"
+                    >
+                      {isExportingPdf ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>Generating PDF...</span>
+                        </>
+                      ) : (
+                        <>
+                          <FileDown className="h-3 w-3 text-[#fb6b6a]" />
+                          <span>Download PDF</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={!songNotes && syncedLyrics.length === 0}
+                      onClick={() => {
+                        const content = songNotes || syncedLyrics.map((l) => l.text).join("\n");
+                        if (!content) return;
+                        navigator.clipboard.writeText(content);
+                        setLyricsCopied(true);
+                        setTimeout(() => setLyricsCopied(false), 2000);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] text-[10px] text-[#6b7280] dark:text-[#a1a1aa] hover:border-[#fb6b6a] hover:text-[#fb6b6a] transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      {lyricsCopied ? (
+                        <>
+                          <Check className="h-3 w-3 text-green-500" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          <span>Copy Lyrics</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
-              <p className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] line-clamp-2 italic">
-                {songNotes || "No notes added yet. Click expand to enter lyrics or chords."}
+              <p
+                onClick={() => setShowLyricsPanel(true)}
+                className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] line-clamp-2 italic leading-relaxed cursor-pointer hover:text-[#111827] dark:hover:text-[#f4f4f5] transition-colors"
+              >
+                {songNotes || "No lyrics loaded yet. Click to expand or type song name above to fetch real lyrics."}
               </p>
             )}
           </Card>
