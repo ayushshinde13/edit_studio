@@ -588,6 +588,24 @@ export default function StemStudio() {
   const [lyricsMode, setLyricsMode] = React.useState<"karaoke" | "edit">("karaoke");
   const [lyricsNotFoundNotice, setLyricsNotFoundNotice] = React.useState(false);
   const [isExportingPdf, setIsExportingPdf] = React.useState(false);
+  const [lyricsScript, setLyricsScript] = React.useState<"hinglish" | "hindi">("hinglish");
+  const [lyricsData, setLyricsData] = React.useState<{
+    hasHindiOption: boolean;
+    hinglish?: { plain: string; synced: string; lines: SyncedLyricLine[] };
+    hindi?: { plain: string; synced: string; lines: SyncedLyricLine[] };
+  } | null>(null);
+
+  const handleSwitchScript = React.useCallback((script: "hinglish" | "hindi") => {
+    setLyricsScript(script);
+    if (!lyricsData) return;
+    if (script === "hindi" && lyricsData.hindi) {
+      setSongNotes(lyricsData.hindi.plain);
+      setSyncedLyrics(lyricsData.hindi.lines);
+    } else if (script === "hinglish" && lyricsData.hinglish) {
+      setSongNotes(lyricsData.hinglish.plain);
+      setSyncedLyrics(lyricsData.hinglish.lines);
+    }
+  }, [lyricsData]);
 
   const handleLyricsSearch = React.useCallback(async (queryOverride?: string) => {
     const q = (queryOverride !== undefined ? queryOverride : lyricsSearchInput) || (file ? file.name : "");
@@ -600,6 +618,20 @@ export default function StemStudio() {
         setSongNotes(result.plainLyrics);
         setSyncedLyrics(result.lines);
         setLyricsTrackInfo({ title: result.trackName, artist: result.artistName });
+        setLyricsScript("hinglish");
+        setLyricsData({
+          hasHindiOption: result.hasHindiOption,
+          hinglish: result.hinglishPlainLyrics ? {
+            plain: result.hinglishPlainLyrics,
+            synced: result.hinglishSyncedLyrics || "",
+            lines: result.hinglishLines || [],
+          } : undefined,
+          hindi: result.hindiPlainLyrics ? {
+            plain: result.hindiPlainLyrics,
+            synced: result.hindiSyncedLyrics || "",
+            lines: result.hindiLines || [],
+          } : undefined,
+        });
         setShowLyricsPanel(true);
         setLyricsNotFoundNotice(false);
       } else {
@@ -2270,6 +2302,32 @@ export default function StemStudio() {
                       }`}
                     >
                       Full / Edit
+                    </button>
+                  </div>
+                )}
+                {showLyricsPanel && lyricsData?.hasHindiOption && (
+                  <div className="flex rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] p-0.5 bg-[#fbfbfb] dark:bg-[#18181c]">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchScript("hinglish")}
+                      className={`px-2 py-0.5 text-[10px] font-mono rounded-[3px] transition-colors cursor-pointer ${
+                        lyricsScript === "hinglish"
+                          ? "bg-[#fb6b6a] text-white font-medium"
+                          : "text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a]"
+                      }`}
+                    >
+                      Hinglish
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchScript("hindi")}
+                      className={`px-2 py-0.5 text-[10px] font-mono rounded-[3px] transition-colors cursor-pointer ${
+                        lyricsScript === "hindi"
+                          ? "bg-[#fb6b6a] text-white font-medium"
+                          : "text-[#6b7280] dark:text-[#a1a1aa] hover:text-[#fb6b6a]"
+                      }`}
+                    >
+                      हिंदी (Hindi)
                     </button>
                   </div>
                 )}
