@@ -34,6 +34,9 @@ import {
   ChevronUp,
   Loader2,
   FileDown,
+  Clock,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { fetchSongLyrics, parseLrc, SyncedLyricLine } from "@/lib/audio/lyrics";
 import { downloadLyricsPdf } from "@/lib/audio/lyricsPdf";
@@ -408,6 +411,13 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
   // 8. Merger params
   const [mergeFiles, setMergeFiles] = React.useState<File[]>([]);
   const [crossfadeSecs, setCrossfadeSecs] = React.useState(2);
+  const [trackDurations, setTrackDurations] = React.useState<Record<number, number>>({});
+  const [isMerging, setIsMerging] = React.useState(false);
+  const [mergeProgress, setMergeProgress] = React.useState(0);
+  const [mergeStage, setMergeStage] = React.useState("");
+  const [mergeElapsedTime, setMergeElapsedTime] = React.useState(0);
+  const [isMerged, setIsMerged] = React.useState(false);
+  const [mergedDuration, setMergedDuration] = React.useState(0);
 
   // 9. Compress params
   const [compressionRatio, setCompressionRatio] = React.useState(60);
@@ -816,16 +826,156 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
     }
   };
 
+  const getEstimatedWaitText = (files: File[]) => {
+    const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+    const totalMB = totalBytes / (1024 * 1024);
+    if (totalMB > 25) return "2 to 3 minutes";
+    if (totalMB > 8) return "1 to 2 minutes";
+    return "30 to 60 seconds";
+  };
+
+  const loadTrackDuration = (f: File, index: number) => {
+    try {
+      const url = URL.createObjectURL(f);
+      const a = new Audio();
+      a.preload = "metadata";
+      a.onloadedmetadata = () => {
+        setTrackDurations((prev) => ({ ...prev, [index]: a.duration }));
+        URL.revokeObjectURL(url);
+      };
+      a.onerror = () => {
+        URL.revokeObjectURL(url);
+      };
+      a.src = url;
+    } catch {}
+  };
+
   const handleAddMergeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      setMergeFiles((prev) => [...prev, f]);
-      if (!file) setFile(f);
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (files.length > 0) {
+      const currentLen = mergeFiles.length;
+      setMergeFiles((prev) => [...prev, ...files]);
+      if (!file) setFile(files[0]);
+      setIsMerged(false);
+      files.forEach((f, idx) => {
+        loadTrackDuration(f, currentLen + idx);
+      });
     }
+    e.target.value = "";
   };
 
   const removeMergeFile = (index: number) => {
     setMergeFiles((prev) => prev.filter((_, i) => i !== index));
+    setTrackDurations((prev) => {
+      const next: Record<number, number> = {};
+      let nextIdx = 0;
+      for (let i = 0; i < mergeFiles.length; i++) {
+        if (i !== index) {
+          if (prev[i] !== undefined) next[nextIdx] = prev[i];
+          nextIdx++;
+        }
+      }
+      return next;
+    });
+    setIsMerged(false);
+  };
+
+  const moveMergeFile = (fromIdx: number, direction: -1 | 1) => {
+    const toIdx = fromIdx + direction;
+    if (toIdx < 0 || toIdx >= mergeFiles.length) return;
+    setMergeFiles((prev) => {
+      const copy = [...prev];
+      const temp = copy[fromIdx];
+      copy[fromIdx] = copy[toIdx];
+      copy[toIdx] = temp;
+      return copy;
+    });
+    setTrackDurations((prev) => {
+      const copy = { ...prev };
+      const temp = copy[fromIdx];
+      copy[fromIdx] = copy[toIdx];
+      copy[toIdx] = temp;
+      return copy;
+    });
+    setIsMerged(false);
+  };
+
+  const executeMerge = async (autoDownload = false) => {
+    if (mergeFiles.length === 0) return;
+    setIsMerging(true);
+    setMergeProgress(5);
+    setMergeElapsedTime(0);
+    const estWait = getEstimatedWaitText(mergeFiles);
+    setMergeStage(`Initializing audio merger... Estimated wait: ${estWait}`);
+
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      setMergeElapsedTime(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    try {
+      const mergeBuffers: AudioBuffer[] = [];
+      for (let i = 0; i < mergeFiles.length; i++) {
+        const mf = mergeFiles[i];
+        const stepProgress = Math.floor(10 + (i / mergeFiles.length) * 70);
+        setMergeProgress(stepProgress);
+        setMergeStage(
+          `Decoding Track #${i + 1} of ${mergeFiles.length}: "${mf.name}" (${formatBytes(mf.size)})... Please wait (${estWait}).`
+        );
+        await new Promise((r) => setTimeout(r, 60));
+
+        try {
+          const b = await decodeAudioFromFile(mf);
+          mergeBuffers.push(b);
+          setTrackDurations((prev) => ({ ...prev, [i]: b.duration }));
+        } catch (decErr) {
+          console.error("Failed to decode merge track:", mf.name, decErr);
+        }
+      }
+
+      if (mergeBuffers.length === 0) {
+        throw new Error("Could not decode audio tracks. Please verify file formats.");
+      }
+
+      setMergeProgress(85);
+      setMergeStage(`Applying ${crossfadeSecs}s smooth crossfade & joining tracks...`);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const merged = mergeAudioBuffers(mergeBuffers, crossfadeSecs);
+
+      setMergeProgress(95);
+      setMergeStage("Finalizing merged audio buffer...");
+      await new Promise((r) => setTimeout(r, 80));
+
+      setDecodedBuffer(merged);
+      setDuration(merged.duration);
+      setMergedDuration(merged.duration);
+      setTrimStart(0);
+      setTrimEnd(merged.duration);
+      setCurrentTime(0);
+      setIsMerged(true);
+
+      setMergeProgress(100);
+      setMergeStage(`Successfully merged ${mergeBuffers.length} tracks! Total length: ${formatTime(merged.duration)}.`);
+
+      if (autoDownload) {
+        let effectiveExt = exportExt;
+        let effectiveKbps = kbps;
+        const blob = exportAudioBlob(merged, effectiveExt, effectiveKbps);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `edito_merged_tracks_${Date.now()}.${effectiveExt}`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
+      console.error("Merge error:", err);
+      alert("Error merging audio tracks: " + (err?.message || "Please check files and try again."));
+    } finally {
+      clearInterval(timerInterval);
+      setIsMerging(false);
+    }
   };
 
   const startVocalSeparation = async () => {
@@ -918,14 +1068,12 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
         } else if (toolId === "speed") {
           exportBuf = changeBufferSpeed(sourceBuf, speedVal);
         } else if (toolId === "merger" && mergeFiles.length > 0) {
-          const mergeBuffers: AudioBuffer[] = [];
-          for (const mf of mergeFiles) {
-            try {
-              const b = await decodeAudioFromFile(mf);
-              mergeBuffers.push(b);
-            } catch {}
+          if (decodedBuffer && isMerged) {
+            exportBuf = decodedBuffer;
+          } else {
+            await executeMerge(true);
+            return;
           }
-          exportBuf = mergeAudioBuffers(mergeBuffers.length > 0 ? mergeBuffers : [sourceBuf]);
         } else if (toolId === "vocal-remover") {
           let vLevel = vocalMuted || vocalVolume === 0 ? 0 : vocalVolume / 100;
           let mLevel = musicMuted || musicVolume === 0 ? 0 : musicVolume / 100;
@@ -1065,12 +1213,23 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
           </div>
           <Button
             size="sm"
-            onClick={() => handleExport()}
-            disabled={isExporting || (!file && toolId !== "blank" && toolId !== "merger" && toolId !== "mix") || (toolId === "merger" && mergeFiles.length === 0)}
+            onClick={() => {
+              if (toolId === "merger") {
+                executeMerge(true);
+              } else {
+                handleExport();
+              }
+            }}
+            disabled={
+              isExporting ||
+              isMerging ||
+              (!file && toolId !== "blank" && toolId !== "merger" && toolId !== "mix") ||
+              (toolId === "merger" && mergeFiles.length === 0)
+            }
             className="h-7 text-xs px-3"
           >
             <Download className="h-3 w-3 mr-1" />
-            {isExporting
+            {isExporting || isMerging
               ? "Rendering..."
               : toolId === "video-to-audio"
               ? "Extract & Download"
@@ -1799,9 +1958,10 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
               </div>
               <label className="inline-flex items-center gap-1.5 px-3 py-1 rounded-[4px] bg-[#fb6b6a] text-white text-xs font-medium cursor-pointer hover:bg-[#ea5857] transition-colors">
                 <Plus className="h-3.5 w-3.5" />
-                <span>Add Track</span>
+                <span>Add Track(s)</span>
                 <input
                   type="file"
+                  multiple
                   accept="audio/*"
                   onChange={handleAddMergeFile}
                   className="hidden"
@@ -1810,43 +1970,98 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
             </div>
 
             {mergeFiles.length === 0 ? (
-              <div className="p-6 text-center rounded-[6px] border border-dashed border-[#d1d5db] dark:border-[#3f3f46] bg-[#fbfbfb] dark:bg-[#18181c]">
+              <label className="block p-6 text-center rounded-[6px] border border-dashed border-[#d1d5db] dark:border-[#3f3f46] bg-[#fbfbfb] dark:bg-[#18181c] cursor-pointer hover:border-[#fb6b6a] transition-colors">
+                <input
+                  type="file"
+                  multiple
+                  accept="audio/*"
+                  onChange={handleAddMergeFile}
+                  className="hidden"
+                />
                 <Layers className="h-6 w-6 text-[#6b7280] dark:text-[#a1a1aa] mx-auto mb-1.5" />
-                <span className="text-xs text-[#6b7280] dark:text-[#a1a1aa]">
-                  No audio tracks added yet. Click &quot;Add Track&quot; above to select files.
+                <span className="text-xs text-[#111827] dark:text-[#f4f4f5] font-medium block">
+                  Click or drag audio tracks here to merge
                 </span>
-              </div>
+                <span className="text-[10px] text-[#6b7280] dark:text-[#a1a1aa] mt-0.5 block">
+                  Supports multiple MP3, WAV, AAC, FLAC files.
+                </span>
+              </label>
             ) : (
-              <div className="space-y-1.5">
-                {mergeFiles.map((f, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between p-2 rounded-[4px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c]"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-[10px] text-[#fb6b6a] px-1.5 py-0.5 rounded bg-[#fb6b6a]/10">
-                        #{idx + 1}
-                      </span>
-                      <span className="text-xs text-[#111827] dark:text-[#f4f4f5] font-medium truncate max-w-[200px] sm:max-w-xs">
-                        {f.name}
-                      </span>
-                      <span className="text-[10px] text-[#6b7280] dark:text-[#a1a1aa]">
-                        ({formatBytes(f.size)})
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeMergeFile(idx)}
-                      className="p-1 rounded text-[#6b7280] hover:text-[#ef4444] transition-colors"
-                      title="Remove track"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
+              <div className="space-y-2">
+                {(() => {
+                  let cumulativeSec = 0;
+                  return mergeFiles.map((f, idx) => {
+                    const dur = trackDurations[idx] || 0;
+                    const startSec = cumulativeSec;
+                    const endSec = dur > 0 ? startSec + dur : 0;
+                    if (dur > 0) {
+                      cumulativeSec = Math.max(0, endSec - crossfadeSecs);
+                    }
+                    return (
+                      <div
+                        key={`${f.name}_${idx}`}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] gap-2"
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="font-mono text-[10px] text-[#fb6b6a] px-1.5 py-0.5 rounded bg-[#fb6b6a]/10 font-bold shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <span className="text-xs text-[#111827] dark:text-[#f4f4f5] font-medium truncate block">
+                              {f.name}
+                            </span>
+                            <div className="flex items-center gap-2 text-[10px] text-[#6b7280] dark:text-[#a1a1aa] mt-0.5">
+                              <span>{formatBytes(f.size)}</span>
+                              {dur > 0 && (
+                                <>
+                                  <span>•</span>
+                                  <span className="font-mono text-[#10b981]">⏱ {formatTime(dur)}</span>
+                                  <span>•</span>
+                                  <span className="font-mono text-[#38bdf8]">
+                                    Timeline: {formatTime(startSec)} - {formatTime(endSec)}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => moveMergeFile(idx, -1)}
+                            disabled={idx === 0}
+                            className="p-1 rounded text-[#6b7280] hover:text-[#fb6b6a] disabled:opacity-30 disabled:hover:text-[#6b7280] transition-colors"
+                            title="Move Up"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveMergeFile(idx, 1)}
+                            disabled={idx === mergeFiles.length - 1}
+                            className="p-1 rounded text-[#6b7280] hover:text-[#fb6b6a] disabled:opacity-30 disabled:hover:text-[#6b7280] transition-colors"
+                            title="Move Down"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeMergeFile(idx)}
+                            className="p-1 rounded text-[#6b7280] hover:text-[#ef4444] transition-colors ml-1"
+                            title="Remove track"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             )}
 
+            {/* Crossfade Settings */}
             <div className="p-3 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] space-y-1">
               <div className="flex items-center justify-between text-xs">
                 <Label className="text-xs text-[#111827] dark:text-[#f4f4f5]">Crossfade Overlap Duration</Label>
@@ -1857,10 +2072,130 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
                 min={0}
                 max={6}
                 step={0.5}
-                onValueChange={(v) => setCrossfadeSecs(v[0])}
+                onValueChange={(v) => {
+                  setCrossfadeSecs(v[0]);
+                  setIsMerged(false);
+                }}
                 className="mt-1"
               />
+              <span className="text-[10px] text-[#6b7280] dark:text-[#a1a1aa] block pt-0.5">
+                Smoothly blends the ending of each track into the beginning of the next track.
+              </span>
             </div>
+
+            {/* Estimated Wait Time Banner */}
+            {mergeFiles.length > 0 && (
+              <div className="flex items-center justify-between p-3 rounded-[6px] border border-[#e5e7eb] dark:border-[#27272a] bg-[#fbfbfb] dark:bg-[#18181c] text-xs">
+                <div className="flex items-center gap-2.5">
+                  <Clock className="h-4 w-4 text-[#fb6b6a] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-[#111827] dark:text-[#f4f4f5] block">
+                      Estimated Processing Wait Time: ~{getEstimatedWaitText(mergeFiles)}
+                    </span>
+                    <span className="text-[10px] text-[#6b7280] dark:text-[#a1a1aa] block">
+                      {mergeFiles.length} tracks ({formatBytes(mergeFiles.reduce((acc, f) => acc + f.size, 0))}) • 100% processed securely in your browser.
+                    </span>
+                  </div>
+                </div>
+                <span className="font-mono text-[11px] font-bold text-[#fb6b6a] bg-[#fb6b6a]/10 px-2 py-0.5 rounded shrink-0">
+                  {getEstimatedWaitText(mergeFiles)}
+                </span>
+              </div>
+            )}
+
+            {/* Live Progress & Wait Timer (Active while merging) */}
+            {isMerging && (
+              <div className="p-4 rounded-[6px] border border-[#fb6b6a]/40 bg-[#fb6b6a]/5 dark:bg-[#fb6b6a]/10 space-y-3 animate-in fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 text-[#fb6b6a] animate-spin" />
+                    <span className="font-semibold text-[#111827] dark:text-[#f4f4f5]">
+                      Merging Audio Tracks in Progress...
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 font-mono text-[11px] text-[#fb6b6a] font-bold">
+                    <span className="bg-white dark:bg-[#18181c] px-2 py-0.5 rounded border border-[#fb6b6a]/30">
+                      ⏱️ Expected Wait: {getEstimatedWaitText(mergeFiles)}
+                    </span>
+                    <span className="bg-white dark:bg-[#18181c] px-2 py-0.5 rounded border border-[#fb6b6a]/30">
+                      ⏳ Elapsed: {formatTime(mergeElapsedTime)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full bg-[#e5e7eb] dark:bg-[#27272a] h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-[#fb6b6a] h-full transition-all duration-300 rounded-full"
+                    style={{ width: `${mergeProgress}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-[#6b7280] dark:text-[#a1a1aa]">
+                  <span className="truncate max-w-[280px] sm:max-w-md font-mono">{mergeStage}</span>
+                  <span className="font-mono font-bold text-[#fb6b6a]">{mergeProgress}%</span>
+                </div>
+              </div>
+            )}
+
+            {/* Merged Success Panel */}
+            {isMerged && !isMerging && (
+              <div className="p-4 rounded-[6px] border border-[#10b981]/40 bg-[#10b981]/5 dark:bg-[#10b981]/10 space-y-3 animate-in fade-in">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2 text-[#10b981]">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span className="font-semibold text-[#111827] dark:text-[#f4f4f5]">
+                      All Tracks Merged Successfully!
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] text-[#10b981] bg-[#10b981]/15 px-2 py-0.5 rounded font-bold">
+                    Total Duration: {formatTime(mergedDuration)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa]">
+                  The combined audio is ready in your browser. You can listen right now using the transport controls below or download the file.
+                </p>
+                <div className="flex items-center gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    onClick={() => playAudio(0)}
+                    className="h-8 text-xs bg-[#10b981] hover:bg-[#059669] text-white"
+                  >
+                    <Play className="h-3.5 w-3.5 mr-1" />
+                    Play Merged Song
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleExport()}
+                    className="h-8 text-xs border-[#10b981]/40 hover:bg-[#10b981]/10"
+                  >
+                    <Download className="h-3.5 w-3.5 mr-1 text-[#10b981]" />
+                    Download Merged File
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Prominent Action Button */}
+            <Button
+              onClick={() => executeMerge(false)}
+              disabled={isMerging || mergeFiles.length < 2}
+              className="w-full h-10 bg-[#fb6b6a] hover:bg-[#ea5857] text-white text-xs font-semibold rounded-[6px] flex items-center justify-center gap-2 transition-all shadow-sm"
+            >
+              {isMerging ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Merging Tracks ({mergeProgress}%) — Please Wait...</span>
+                </>
+              ) : (
+                <>
+                  <Layers className="h-4 w-4" />
+                  <span>
+                    {isMerged ? "⚡ Re-Merge & Update Audio" : "⚡ Merge & Preview Audio Tracks"}
+                  </span>
+                </>
+              )}
+            </Button>
           </div>
         )}
 
@@ -2268,6 +2603,12 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
               <span className="text-[10px] font-mono text-[#10b981] flex items-center gap-1 border border-[#10b981]/30 bg-[#10b981]/10 px-2 py-0.5 rounded-[4px]">
                 <CheckCircle2 className="h-3 w-3" />
                 Vocal Separation Ready
+              </span>
+            )}
+            {toolId === "merger" && isMerged && (
+              <span className="text-[10px] font-mono text-[#10b981] flex items-center gap-1 border border-[#10b981]/30 bg-[#10b981]/10 px-2 py-0.5 rounded-[4px]">
+                <CheckCircle2 className="h-3 w-3" />
+                Merged Audio Ready
               </span>
             )}
           </div>

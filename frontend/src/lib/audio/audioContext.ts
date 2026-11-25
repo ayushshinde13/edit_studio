@@ -263,27 +263,69 @@ export function changeBufferSpeed(sourceBuf: AudioBuffer, speed: number): AudioB
 }
 
 /**
- * Concatenates multiple AudioBuffers end-to-end
+ * Concatenates multiple AudioBuffers end-to-end with optional smooth equal-power crossfade
  */
-export function mergeAudioBuffers(buffers: AudioBuffer[]): AudioBuffer {
+export function mergeAudioBuffers(buffers: AudioBuffer[], crossfadeSec = 0): AudioBuffer {
   if (buffers.length === 0) return generateSilenceBuffer(10);
   if (buffers.length === 1) return buffers[0];
 
   const ctx = getAudioContext();
   const sampleRate = buffers[0].sampleRate;
   const numChannels = Math.max(...buffers.map((b) => b.numberOfChannels));
-  const totalLength = buffers.reduce((sum, b) => sum + b.length, 0);
+
+  // Compute total length accounting for crossfade overlaps
+  let totalLength = buffers[0].length;
+  for (let i = 1; i < buffers.length; i++) {
+    const maxOverlap = Math.floor(Math.min(buffers[i - 1].length, buffers[i].length) / 2);
+    const overlapSamples = crossfadeSec > 0 ? Math.min(Math.floor(crossfadeSec * sampleRate), maxOverlap) : 0;
+    totalLength += buffers[i].length - overlapSamples;
+  }
 
   const merged = ctx.createBuffer(numChannels, totalLength, sampleRate);
+  const mergedChannels: Float32Array[] = [];
+  for (let c = 0; c < numChannels; c++) {
+    mergedChannels.push(merged.getChannelData(c));
+  }
 
-  let currentOffset = 0;
-  for (const buf of buffers) {
+  let writeOffset = 0;
+  for (let i = 0; i < buffers.length; i++) {
+    const buf = buffers[i];
+    const bufLen = buf.length;
+    const isFirst = i === 0;
+    const prevBuf = i > 0 ? buffers[i - 1] : null;
+    const maxOverlap = prevBuf ? Math.floor(Math.min(prevBuf.length, bufLen) / 2) : 0;
+    const overlapSamples = prevBuf && crossfadeSec > 0 ? Math.min(Math.floor(crossfadeSec * sampleRate), maxOverlap) : 0;
+
     for (let c = 0; c < numChannels; c++) {
       const src = buf.getChannelData(Math.min(c, buf.numberOfChannels - 1));
-      merged.copyToChannel(src, c, currentOffset);
+      const dest = mergedChannels[c];
+
+      if (isFirst || overlapSamples === 0) {
+        for (let s = 0; s < bufLen; s++) {
+          dest[writeOffset + s] = src[s];
+        }
+      } else {
+        const startCrossfade = writeOffset - overlapSamples;
+        for (let s = 0; s < overlapSamples; s++) {
+          const t = s / overlapSamples;
+          const gainIn = Math.sin(t * Math.PI * 0.5);
+          const gainOut = Math.cos(t * Math.PI * 0.5);
+          const existing = dest[startCrossfade + s];
+          dest[startCrossfade + s] = existing * gainOut + src[s] * gainIn;
+        }
+        for (let s = overlapSamples; s < bufLen; s++) {
+          dest[startCrossfade + s] = src[s];
+        }
+      }
     }
-    currentOffset += buf.length;
+
+    if (isFirst) {
+      writeOffset += bufLen;
+    } else {
+      writeOffset += bufLen - overlapSamples;
+    }
   }
+
   return merged;
 }
 
