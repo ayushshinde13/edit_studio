@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { SITE_URL } from "@/lib/seo/sitemap-data";
-import { generateWebSiteSchema } from "@/lib/seo/schema";
+import { generateWebSiteSchema, generateOrganizationSchema } from "@/lib/seo/schema";
 import { ThemeProvider } from "@/design-system/themes/theme-provider";
 import { ResponsiveShell } from "@/design-system/layouts/responsive-shell";
 
@@ -69,6 +69,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const websiteSchema = generateWebSiteSchema();
+  const organizationSchema = generateOrganizationSchema();
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -80,6 +81,10 @@ export default function RootLayout({
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteSchema) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
         />
       </head>
       <body className="min-h-screen bg-white dark:bg-[#09090b] text-[#111827] dark:text-[#f4f4f5] selection:bg-[#fb6b6a] selection:text-white">

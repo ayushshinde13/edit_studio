@@ -1,0 +1,42 @@
+# Edito Studio — Comprehensive Technical & Capability Documentation
+
+## System Architecture
+Edito is an offline-capable, client-side web application built with Next.js, WebAssembly (FFmpeg / libmp3lame / Web Audio API), WebGPU (ONNX Runtime Web), and HTML5 Canvas.
+It does not transmit, store, or process user audio or images on remote cloud servers. All digital signal processing (DSP) and machine learning inference run directly inside the user's browser runtime.
+
+## SEO, AEO & GEO Specification
+- Canonical Base URL: https://edito.studio
+- Primary Schema Markup: WebSite (with SearchAction), Organization, WebApplication, BreadcrumbList, FAQPage
+- Sitemap: https://edito.studio/sitemap.xml
+- Robots Policy: Permissive for all standard search crawlers and AI search agents (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, Applebot-Extended, CCBot).
+
+## Tool Specifications
+
+### 1. AI Stem Separator (/stems)
+- Technology: ONNX Runtime Web / WebGPU.
+- Input formats: MP3, WAV, AAC, M4A, FLAC, OGG, WebM, MP4.
+- Modes: 2-Stem (Vocals & Backing) or 4-Stem (Vocals, Drums, Bass, Other).
+- Features: Real-time pitch transposition (-12 to +12 semitones), tempo adjustment (0.75x to 1.5x), live chroma chord detection, multi-stem volume faders, solo/mute toggles, individual stem export, master mix export, and ZIP bundle download.
+
+### 2. AI Vocal Remover (/audio/vocal-remover)
+- Technology: Zero-Phase Spatial Cancellation (L - R) with Dual-Cascaded 140Hz Low-Pass Mid-Bass Injection.
+- Mechanism: Eliminates centered lead vocals mathematically to zero bleed while retaining full bass dynamics, kick drum punch, and stereo spatial effects.
+- Features: Independent Vocal / Music faders, sing-in-your-key pitch transpose, 1-click Karaoke download, Acapella download, and live synchronized lyrics display.
+
+### 3. Audio Cutter & Trimmer (/audio/cutter)
+- Precision: Millisecond-level waveform slicing.
+- Features: Dual boundary handles, audio scrub preview, fade-in and fade-out toggles, MP3/WAV high-bitrate export.
+
+### 4. Audio Merger & Song Joiner (/audio/merger)
+- Mechanism: Equal-power sine/cosine crossfade buffer stitching.
+- Features: Multi-track selection, track reordering (up/down), duration & timeline interval preview, 0s to 6s crossfade slider, estimated processing wait timer, live progress bar, and immediate browser player preview.
+
+### 5. Audio Converter (/audio/converter)
+- Supported Target Formats: MP3 (up to 320kbps), WAV (lossless 16-bit PCM), AAC, FLAC, OGG, M4A.
+
+### 6. Creative Visual Tools (/creative/*)
+- Background Remover (/creative/remove-background): Subject extraction with color replacement or transparent PNG export. Multi-image queue.
+- Photo Editor (/creative/photo-editor): Canvas cropping, 90-degree rotations, brightness/contrast/saturation filters, text annotations.
+- Bulk Image Resizer (/creative/resize-image): Lanczos3 downscaling, exact dimensions or target file size in KB, social media dimension presets, ZIP export.
+- Watermark Remover (/creative/remove-watermark): Local canvas inpainting brush to remove stamps, logos, and unwanted objects.
+- Video Watermark Remover (/creative/remove-video-watermark): Client-side video canvas delogo inpainting.

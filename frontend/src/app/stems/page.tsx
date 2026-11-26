@@ -2,7 +2,11 @@ import * as React from "react";
 import type { Metadata } from "next";
 import StemStudio from "@/features/stems/StemStudio";
 import { constructMetadata } from "@/lib/seo/metadata";
-import { generateSoftwareApplicationSchema, generateHowToSchema, generateFAQSchema } from "@/lib/seo/schema";
+import {
+  generateSoftwareApplicationSchema,
+  generateBreadcrumbSchema,
+  generateFAQSchema,
+} from "@/lib/seo/schema";
 import { TOOLS } from "@/config/tools";
 import { Sparkles, Shield, Cpu, Zap } from "lucide-react";
 import { Card } from "@/design-system/primitives/card";
@@ -18,11 +22,10 @@ export const metadata: Metadata = constructMetadata({
 
 export default function StemSeparatorPage() {
   const appSchema = generateSoftwareApplicationSchema(stemTool);
-  const howToSchema = generateHowToSchema({
-    title: "How to Separate Stems Online with AI for Free",
-    description: "Step-by-step guide to isolating vocals and backing tracks locally in your browser.",
-    steps: stemTool.steps || [],
-  });
+  const breadcrumbSchema = generateBreadcrumbSchema([
+    { name: "Home", path: "/" },
+    { name: "Stem Separator", path: "/stems" },
+  ]);
   const faqSchema = generateFAQSchema(stemTool.faqs || []);
 
   return (
@@ -33,7 +36,7 @@ export default function StemSeparatorPage() {
       />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(howToSchema) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
       />
       <script
         type="application/ld+json"
