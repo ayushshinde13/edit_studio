@@ -686,7 +686,8 @@ export default function StemStudio() {
     const id = currentProjectIdRef.current || `stems_${Date.now()}`;
     currentProjectIdRef.current = id;
     try {
-      localStorage.setItem("edito_last_active_project_id", id);
+      sessionStorage.setItem("edito_last_active_project_id", id);
+      localStorage.removeItem("edito_last_active_project_id");
     } catch {}
 
     const currentSt = customStems || stemsRef.current;
@@ -750,6 +751,7 @@ export default function StemStudio() {
     setTempoRate(1.0);
     currentProjectIdRef.current = null;
     try {
+      sessionStorage.removeItem("edito_last_active_project_id");
       localStorage.removeItem("edito_last_active_project_id");
     } catch {}
     if (typeof window !== "undefined" && window.location.search) {
@@ -769,7 +771,7 @@ export default function StemStudio() {
       let targetId = queryProjectId;
       if (!targetId) {
         try {
-          targetId = localStorage.getItem("edito_last_active_project_id");
+          targetId = sessionStorage.getItem("edito_last_active_project_id");
         } catch {}
       }
       if (!targetId) return;
@@ -1384,7 +1386,8 @@ export default function StemStudio() {
         const newId = `stems_${Date.now()}`;
         currentProjectIdRef.current = newId;
         try {
-          localStorage.setItem("edito_last_active_project_id", newId);
+          sessionStorage.setItem("edito_last_active_project_id", newId);
+          localStorage.removeItem("edito_last_active_project_id");
         } catch {}
 
         await saveProjectToDb(f, stems, false, normalized);

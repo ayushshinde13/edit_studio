@@ -15,10 +15,17 @@ import { NavigationBar } from "./navigation-bar";
 import { Footer } from "./footer";
 import { CreateQuickStartModal } from "@/components/CreateQuickStartModal";
 import { cn } from "@/lib/utils";
+import { initSessionStorage } from "@/lib/storage/indexeddb";
 
 export function ResponsiveShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [quickCreateOpen, setQuickCreateOpen] = React.useState(false);
+
+  // Initialize session lifecycle & privacy cleanup
+  React.useEffect(() => {
+    initSessionStorage();
+  }, []);
+
   const isAdmin = pathname.startsWith("/admin");
 
   if (isAdmin) {

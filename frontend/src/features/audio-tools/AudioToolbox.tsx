@@ -330,12 +330,22 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
     }
   }, [file, lyricsSearchInput]);
 
-  // Restore Project from IndexedDB if queryProjectId is present
+  // Restore Project from IndexedDB if queryProjectId is present or on page refresh
   React.useEffect(() => {
-    if (!queryProjectId) return;
+    let targetProjectId = queryProjectId;
+    if (!targetProjectId && typeof window !== "undefined") {
+      const activeProjId = sessionStorage.getItem("edito_active_project_id");
+      const activeToolId = sessionStorage.getItem("edito_active_tool_id");
+      if (activeProjId && activeToolId === toolId) {
+        targetProjectId = activeProjId;
+      }
+    }
+    if (!targetProjectId) return;
+
     let isMounted = true;
-    getProject(queryProjectId).then(async (saved) => {
+    getProject(targetProjectId).then(async (saved) => {
       if (!saved || !saved.audioBlob || !isMounted) return;
+      if (saved.state?.toolId && saved.state.toolId !== toolId) return;
       try {
         const reconstructedFile = new File([saved.audioBlob], saved.audioFileName || `${saved.title}.mp3`, {
           type: saved.audioFileType || "audio/mpeg",
@@ -364,7 +374,7 @@ export default function AudioToolbox({ toolId, toolName }: AudioToolboxProps) {
     return () => {
       isMounted = false;
     };
-  }, [queryProjectId, handleLyricsSearch]);
+  }, [queryProjectId, toolId, handleLyricsSearch]);
 
   const activeSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
   const vocalGainRef = React.useRef<GainNode | null>(null);
