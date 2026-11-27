@@ -16,7 +16,9 @@ import {
   Layers,
   Wand2,
   Brush,
-  ShieldCheck,
+  Bot,
+  Zap,
+  MousePointerClick,
 } from "lucide-react";
 import { Button } from "@/design-system/primitives/button";
 import { Slider } from "@/design-system/primitives/slider";
@@ -26,6 +28,7 @@ import {
   removeBackgroundAdvanced,
   type RemoveBackgroundOptions,
   type SegmentationResult,
+  perceptualDistSq,
 } from "@/lib/image/backgroundRemoval";
 
 interface ImageItem {
@@ -35,6 +38,7 @@ interface ImageItem {
   originalCanvas: HTMLCanvasElement | null;
   processedCanvas: HTMLCanvasElement | null;
   maskCanvas: HTMLCanvasElement | null;
+  engineUsed?: "ai" | "local";
 }
 
 export default function BackgroundRemoverPage() {
@@ -42,16 +46,18 @@ export default function BackgroundRemoverPage() {
   const [activeId, setActiveId] = React.useState<string | null>(null);
 
   // Advanced Algorithm Controls
-  const [mode, setMode] = React.useState<"auto" | "studio" | "graphic">("auto");
+  const [mode, setMode] = React.useState<"ai" | "auto" | "studio" | "graphic">("ai");
   const [tolerance, setTolerance] = React.useState(35);
   const [feather, setFeather] = React.useState(2);
   const [removeShadows, setRemoveShadows] = React.useState(true);
   const [bgColor, setBgColor] = React.useState<string>("transparent");
   const [isProcessing, setIsProcessing] = React.useState(false);
+  const [progressText, setProgressText] = React.useState("Processing...");
+  const [progressPercent, setProgressPercent] = React.useState<number | null>(null);
   const [showOriginal, setShowOriginal] = React.useState(false);
 
-  // Interactive Refine Brush
-  const [brushTool, setBrushTool] = React.useState<"none" | "restore" | "erase">("none");
+  // Interactive Tools: none | restore | erase | magic-wand
+  const [activeTool, setActiveTool] = React.useState<"none" | "restore" | "erase" | "wand">("none");
   const [brushSize, setBrushSize] = React.useState(25);
   const [isPainting, setIsPainting] = React.useState(false);
 
@@ -60,6 +66,21 @@ export default function BackgroundRemoverPage() {
   const initialInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const activeImage = images.find((img) => img.id === activeId) ?? null;
+
+  // Helper to safely load HTMLImageElement
+  const loadImage = React.useCallback(async (src: string): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      if (img.complete && img.naturalWidth > 0) {
+        resolve(img);
+        return;
+      }
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }, []);
 
   // ── Render composite onto preview canvas ─────────────────────────────────
   const drawToCanvas = React.useCallback(
@@ -73,7 +94,6 @@ export default function BackgroundRemoverPage() {
       if (!canvas) return;
 
       if (forceOriginal) {
-        // Render raw original image
         if (imgSource instanceof HTMLCanvasElement) {
           canvas.width = imgSource.width;
           canvas.height = imgSource.height;
@@ -81,15 +101,13 @@ export default function BackgroundRemoverPage() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(imgSource, 0, 0);
         } else if (typeof imgSource === "string") {
-          const img = new Image();
-          img.src = imgSource;
-          img.onload = () => {
+          loadImage(imgSource).then((img) => {
             canvas.width = img.width;
             canvas.height = img.height;
             const ctx = canvas.getContext("2d")!;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
-          };
+          });
         }
         return;
       }
@@ -112,26 +130,24 @@ export default function BackgroundRemoverPage() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(imgSource, 0, 0);
         } else {
-          const img = new Image();
-          img.src = imgSource;
-          img.onload = () => {
+          loadImage(imgSource).then((img) => {
             canvas.width = img.width;
             canvas.height = img.height;
             const ctx = canvas.getContext("2d")!;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
-          };
+          });
         }
       }
     },
-    []
+    [loadImage]
   );
 
   // ── Switch active image ─────────────────────────────────────────────────
   const selectImage = React.useCallback(
     (item: ImageItem, bg: string) => {
       setActiveId(item.id);
-      setBrushTool("none");
+      setActiveTool("none");
       drawToCanvas(item.originalCanvas ?? item.src, item.processedCanvas, bg, showOriginal);
     },
     [drawToCanvas, showOriginal]
@@ -147,37 +163,41 @@ export default function BackgroundRemoverPage() {
         const f = files[i];
         const src = URL.createObjectURL(f);
 
-        // Pre-create original canvas
-        const img = new Image();
-        img.src = src;
-        await new Promise((res) => {
-          img.onload = res;
-        });
+        try {
+          const img = await loadImage(src);
+          const origCanvas = document.createElement("canvas");
+          origCanvas.width = img.naturalWidth || img.width;
+          origCanvas.height = img.naturalHeight || img.height;
+          const oCtx = origCanvas.getContext("2d")!;
+          oCtx.drawImage(img, 0, 0);
 
-        const origCanvas = document.createElement("canvas");
-        origCanvas.width = img.width;
-        origCanvas.height = img.height;
-        const oCtx = origCanvas.getContext("2d")!;
-        oCtx.drawImage(img, 0, 0);
-
-        loadedItems.push({
-          id: `img_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-          src,
-          name: f.name,
-          originalCanvas: origCanvas,
-          processedCanvas: null,
-          maskCanvas: null,
-        });
+          loadedItems.push({
+            id: `img_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            src,
+            name: f.name,
+            originalCanvas: origCanvas,
+            processedCanvas: null,
+            maskCanvas: null,
+          });
+        } catch {
+          loadedItems.push({
+            id: `img_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            src,
+            name: f.name,
+            originalCanvas: null,
+            processedCanvas: null,
+            maskCanvas: null,
+          });
+        }
       }
 
       setImages((prev) => [...prev, ...loadedItems]);
 
-      // Auto-select first added
       const first = loadedItems[0];
       setActiveId(first.id);
-      drawToCanvas(first.originalCanvas, null, bgColor, false);
+      drawToCanvas(first.originalCanvas ?? first.src, null, bgColor, false);
     },
-    [bgColor, drawToCanvas]
+    [bgColor, drawToCanvas, loadImage]
   );
 
   const handleInitialUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -190,7 +210,6 @@ export default function BackgroundRemoverPage() {
     e.target.value = "";
   };
 
-  // ── Remove image from queue ─────────────────────────────────────────────
   const removeImage = (id: string) => {
     setImages((prev) => {
       const remaining = prev.filter((img) => img.id !== id);
@@ -207,22 +226,36 @@ export default function BackgroundRemoverPage() {
 
   // ── Run Intelligent Foreground Extraction ──────────────────────────────
   const handleRemoveBg = React.useCallback(async () => {
-    if (!activeImage || !activeImage.originalCanvas) return;
+    if (!activeImage) return;
     setIsProcessing(true);
-
-    // Yield to allow UI spinner
-    await new Promise((r) => setTimeout(r, 40));
+    setProgressText("Preparing image canvas...");
+    setProgressPercent(10);
 
     try {
+      // Ensure original canvas exists
+      let origCanvas = activeImage.originalCanvas;
+      if (!origCanvas) {
+        const img = await loadImage(activeImage.src);
+        origCanvas = document.createElement("canvas");
+        origCanvas.width = img.naturalWidth || img.width;
+        origCanvas.height = img.naturalHeight || img.height;
+        const oCtx = origCanvas.getContext("2d")!;
+        oCtx.drawImage(img, 0, 0);
+      }
+
       const options: RemoveBackgroundOptions = {
         tolerance,
         mode,
         feather,
         removeShadows,
+        onProgress: (status, pct) => {
+          setProgressText(status);
+          if (pct !== undefined) setProgressPercent(pct);
+        },
       };
 
-      const result: SegmentationResult = removeBackgroundAdvanced(
-        activeImage.originalCanvas,
+      const result: SegmentationResult = await removeBackgroundAdvanced(
+        origCanvas,
         options
       );
 
@@ -232,30 +265,155 @@ export default function BackgroundRemoverPage() {
           item.id === activeImage.id
             ? {
                 ...item,
+                originalCanvas: origCanvas,
                 processedCanvas: result.cutoutCanvas,
                 maskCanvas: result.maskCanvas,
+                engineUsed: result.engineUsed,
               }
             : item
         )
       );
 
-      drawToCanvas(activeImage.originalCanvas, result.cutoutCanvas, bgColor, false);
+      drawToCanvas(origCanvas, result.cutoutCanvas, bgColor, false);
     } catch (err) {
       console.error("Background removal error:", err);
+      setProgressText("An error occurred during removal.");
     } finally {
       setIsProcessing(false);
+      setProgressPercent(null);
     }
-  }, [activeImage, tolerance, mode, feather, removeShadows, bgColor, drawToCanvas]);
+  }, [activeImage, tolerance, mode, feather, removeShadows, bgColor, drawToCanvas, loadImage]);
 
-  // ── Interactive Brush Touch-Up ──────────────────────────────────────────
+  // ── Magic Wand (Click to Erase Background Area) ──────────────────────────
+  const applyMagicWand = React.useCallback(
+    (clientX: number, clientY: number) => {
+      if (!activeImage || !activeImage.originalCanvas) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const startX = Math.floor((clientX - rect.left) * scaleX);
+      const startY = Math.floor((clientY - rect.top) * scaleY);
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (startX < 0 || startX >= w || startY < 0 || startY >= h) return;
+
+      const origCanvas = activeImage.originalCanvas;
+      const oCtx = origCanvas.getContext("2d", { willReadFrequently: true })!;
+      const origData = oCtx.getImageData(0, 0, w, h);
+      const origPixels = origData.data;
+
+      // Sample clicked color
+      const seedIdx = (startY * w + startX) * 4;
+      const targetR = origPixels[seedIdx];
+      const targetG = origPixels[seedIdx + 1];
+      const targetB = origPixels[seedIdx + 2];
+
+      // Get or create mask canvas
+      let maskCanvas = activeImage.maskCanvas;
+      if (!maskCanvas) {
+        maskCanvas = document.createElement("canvas");
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const mCtx = maskCanvas.getContext("2d")!;
+        mCtx.fillStyle = "white";
+        mCtx.fillRect(0, 0, w, h);
+      }
+
+      const mCtx = maskCanvas.getContext("2d", { willReadFrequently: true })!;
+      const mImgData = mCtx.getImageData(0, 0, w, h);
+      const mData = mImgData.data;
+
+      // Threshold based on sensitivity
+      const tolSq = Math.pow(tolerance * 2.2, 2);
+
+      // Connected flood erase
+      const visited = new Uint8Array(w * h);
+      const queue = new Int32Array(w * h);
+      let qHead = 0;
+      let qTail = 0;
+
+      const startPos = startY * w + startX;
+      queue[qTail++] = startPos;
+      visited[startPos] = 1;
+
+      while (qHead < qTail) {
+        const curr = queue[qHead++];
+        const cx = curr % w;
+        const cy = Math.floor(curr / w);
+        const p = curr * 4;
+
+        // Erase in mask
+        mData[p] = 0;
+        mData[p + 1] = 0;
+        mData[p + 2] = 0;
+
+        const neighbors = [
+          cx > 0 ? curr - 1 : -1,
+          cx < w - 1 ? curr + 1 : -1,
+          cy > 0 ? curr - w : -1,
+          cy < h - 1 ? curr + w : -1,
+        ];
+
+        for (let n = 0; n < 4; n++) {
+          const next = neighbors[n];
+          if (next === -1 || visited[next] === 1) continue;
+
+          const nP = next * 4;
+          const r = origPixels[nP];
+          const g = origPixels[nP + 1];
+          const b = origPixels[nP + 2];
+
+          if (perceptualDistSq(r, g, b, targetR, targetG, targetB) < tolSq) {
+            visited[next] = 1;
+            queue[qTail++] = next;
+          }
+        }
+      }
+
+      mCtx.putImageData(mImgData, 0, 0);
+
+      // Re-composite processedCanvas
+      let pCanvas = activeImage.processedCanvas;
+      if (!pCanvas) {
+        pCanvas = document.createElement("canvas");
+        pCanvas.width = w;
+        pCanvas.height = h;
+      }
+      const pCtx = pCanvas.getContext("2d")!;
+      pCtx.clearRect(0, 0, w, h);
+      pCtx.drawImage(origCanvas, 0, 0);
+
+      const pImgData = pCtx.getImageData(0, 0, w, h);
+      const pData = pImgData.data;
+      for (let i = 0; i < pData.length; i += 4) {
+        pData[i + 3] = mData[i];
+      }
+      pCtx.putImageData(pImgData, 0, 0);
+
+      setImages((prev) =>
+        prev.map((item) =>
+          item.id === activeImage.id
+            ? { ...item, maskCanvas, processedCanvas: pCanvas }
+            : item
+        )
+      );
+
+      drawToCanvas(origCanvas, pCanvas, bgColor, false);
+    },
+    [activeImage, tolerance, bgColor, drawToCanvas]
+  );
+
+  // ── Precision Brush Strokes ─────────────────────────────────────────────
   const applyBrushStroke = React.useCallback(
     (clientX: number, clientY: number) => {
       if (
-        brushTool === "none" ||
+        (activeTool !== "restore" && activeTool !== "erase") ||
         !activeImage ||
-        !activeImage.originalCanvas ||
-        !activeImage.maskCanvas ||
-        !activeImage.processedCanvas
+        !activeImage.originalCanvas
       )
         return;
 
@@ -269,55 +427,62 @@ export default function BackgroundRemoverPage() {
       const y = (clientY - rect.top) * scaleY;
       const rad = brushSize * Math.max(scaleX, scaleY);
 
-      const maskCanvas = activeImage.maskCanvas;
-      const mCtx = maskCanvas.getContext("2d")!;
+      const w = canvas.width;
+      const h = canvas.height;
 
-      // Restore = paint white (keep foreground)
-      // Erase = paint transparent black (cutout background)
-      if (brushTool === "restore") {
-        mCtx.globalCompositeOperation = "source-over";
-        mCtx.fillStyle = "rgba(255, 255, 255, 1.0)";
-      } else {
-        mCtx.globalCompositeOperation = "source-over";
-        mCtx.fillStyle = "rgba(0, 0, 0, 1.0)";
+      let maskCanvas = activeImage.maskCanvas;
+      if (!maskCanvas) {
+        maskCanvas = document.createElement("canvas");
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const mCtx = maskCanvas.getContext("2d")!;
+        mCtx.fillStyle = "white";
+        mCtx.fillRect(0, 0, w, h);
       }
 
+      const mCtx = maskCanvas.getContext("2d")!;
+      mCtx.fillStyle = activeTool === "restore" ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)";
       mCtx.beginPath();
       mCtx.arc(x, y, rad, 0, Math.PI * 2);
       mCtx.fill();
 
-      // Re-composite processedCanvas: originalCanvas masked by maskCanvas
-      const pCanvas = activeImage.processedCanvas;
+      let pCanvas = activeImage.processedCanvas;
+      if (!pCanvas) {
+        pCanvas = document.createElement("canvas");
+        pCanvas.width = w;
+        pCanvas.height = h;
+      }
       const pCtx = pCanvas.getContext("2d")!;
-      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      pCtx.clearRect(0, 0, w, h);
       pCtx.drawImage(activeImage.originalCanvas, 0, 0);
 
-      // Read updated mask and apply alpha to processedCanvas
-      const mData = mCtx.getImageData(0, 0, pCanvas.width, pCanvas.height).data;
-      const pImgData = pCtx.getImageData(0, 0, pCanvas.width, pCanvas.height);
+      const mData = mCtx.getImageData(0, 0, w, h).data;
+      const pImgData = pCtx.getImageData(0, 0, w, h);
       const pData = pImgData.data;
 
       for (let i = 0; i < pData.length; i += 4) {
-        // Red channel of mask represents alpha
-        const maskAlpha = mData[i];
-        pData[i + 3] = maskAlpha;
+        pData[i + 3] = mData[i];
       }
       pCtx.putImageData(pImgData, 0, 0);
 
-      // Redraw to screen
       drawToCanvas(activeImage.originalCanvas, pCanvas, bgColor, false);
     },
-    [brushTool, activeImage, brushSize, bgColor, drawToCanvas]
+    [activeTool, activeImage, brushSize, bgColor, drawToCanvas]
   );
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (brushTool === "none") return;
-    setIsPainting(true);
-    applyBrushStroke(e.clientX, e.clientY);
+    if (activeTool === "wand") {
+      applyMagicWand(e.clientX, e.clientY);
+      return;
+    }
+    if (activeTool === "restore" || activeTool === "erase") {
+      setIsPainting(true);
+      applyBrushStroke(e.clientX, e.clientY);
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isPainting || brushTool === "none") return;
+    if (!isPainting || (activeTool !== "restore" && activeTool !== "erase")) return;
     applyBrushStroke(e.clientX, e.clientY);
   };
 
@@ -325,14 +490,13 @@ export default function BackgroundRemoverPage() {
     setIsPainting(false);
   };
 
-  // Reset to original cutout
   const handleResetMask = () => {
-    if (activeImage && activeImage.originalCanvas) {
+    if (activeImage) {
       handleRemoveBg();
     }
   };
 
-  // ── Re-render when bg color changes ────────────────────────────────────
+  // ── Re-render on backdrop change ────────────────────────────────────────
   React.useEffect(() => {
     if (activeImage) {
       drawToCanvas(
@@ -344,7 +508,7 @@ export default function BackgroundRemoverPage() {
     }
   }, [bgColor, showOriginal, drawToCanvas, activeImage]);
 
-  // ── Export current canvas ───────────────────────────────────────────────
+  // ── Export cutout ───────────────────────────────────────────────────────
   const handleExport = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -368,7 +532,7 @@ export default function BackgroundRemoverPage() {
             </h1>
           </div>
           <p className="text-xs text-[#6b7280] dark:text-[#a1a1aa] mt-0.5">
-            Automatic object boundary detection, perimeter palette matting, and fine touch-up brushes. 100% local in your browser.
+            Neural AI object segmentation and precision matting. Zero server uploads — 100% private in browser.
           </p>
         </div>
 
@@ -403,7 +567,7 @@ export default function BackgroundRemoverPage() {
               Select one or more photos
             </span>
             <span className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa] mt-1">
-              Supports JPG, PNG, WebP · High-resolution object detection
+              Supports JPG, PNG, WebP · Isolates any subject (food, people, products, pets)
             </span>
             <input
               ref={initialInputRef}
@@ -420,21 +584,37 @@ export default function BackgroundRemoverPage() {
           {/* ── Left: Canvas preview ── */}
           <div className="lg:col-span-8 space-y-3">
             <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] flex flex-col items-center justify-center min-h-[460px] overflow-hidden relative">
-              {/* Brush active notice */}
-              {brushTool !== "none" && (
-                <div className="absolute top-3 left-3 z-10 bg-black/75 backdrop-blur-md px-2.5 py-1 rounded text-[11px] text-white flex items-center gap-1.5 shadow">
-                  <Brush className="h-3 w-3 text-[#fb6b6a]" />
+              {/* Active Tool Badge */}
+              {activeTool !== "none" && (
+                <div className="absolute top-3 left-3 z-10 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-full text-[11px] text-white flex items-center gap-1.5 shadow">
+                  {activeTool === "wand" ? (
+                    <MousePointerClick className="h-3.5 w-3.5 text-[#fb6b6a]" />
+                  ) : (
+                    <Brush className="h-3.5 w-3.5 text-[#fb6b6a]" />
+                  )}
                   <span>
-                    {brushTool === "restore" ? "Restore (Keep) Brush" : "Erase (Cutout) Brush"} Active: Paint on canvas to refine
+                    {activeTool === "wand"
+                      ? "Magic Wand: Click any background area to erase it"
+                      : activeTool === "restore"
+                      ? "Restore Brush: Paint over subject to restore"
+                      : "Erase Brush: Paint over background to erase"}
                   </span>
                 </div>
               )}
 
-              {/* Processing overlay */}
+              {/* Processing Spinner & Status */}
               {isProcessing && (
-                <div className="absolute inset-0 z-20 bg-black/50 backdrop-blur-[2px] flex flex-col items-center justify-center text-white gap-2">
-                  <div className="h-7 w-7 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span className="text-xs font-medium">Detecting object boundaries & contours...</span>
+                <div className="absolute inset-0 z-20 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center text-white gap-3 p-6 text-center">
+                  <div className="h-8 w-8 border-3 border-white/20 border-t-[#fb6b6a] rounded-full animate-spin" />
+                  <span className="text-xs font-semibold tracking-wide">{progressText}</span>
+                  {progressPercent !== null && (
+                    <div className="w-48 bg-white/20 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-[#fb6b6a] h-full transition-all duration-200"
+                        style={{ width: `${progressPercent}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -445,9 +625,9 @@ export default function BackgroundRemoverPage() {
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
                   className={`max-w-full rounded-[4px] touch-none ${
-                    brushTool === "restore"
+                    activeTool === "wand"
                       ? "cursor-crosshair"
-                      : brushTool === "erase"
+                      : activeTool === "restore" || activeTool === "erase"
                       ? "cursor-crosshair"
                       : "cursor-default"
                   }`}
@@ -522,7 +702,7 @@ export default function BackgroundRemoverPage() {
           <div className="lg:col-span-4 space-y-4">
             <Card className="p-4 border-[#e5e7eb] dark:border-[#27272a] bg-white dark:bg-[#121215] space-y-4">
               <div className="text-xs font-semibold text-[#111827] dark:text-[#f4f4f5] pb-2 border-b border-[#e5e7eb] dark:border-[#27272a] flex items-center justify-between">
-                <span>Object Detection Engine</span>
+                <span>Object Segmentation Engine</span>
                 {activeImage && (
                   <span className="font-normal text-[11px] text-[#6b7280] dark:text-[#a1a1aa] truncate max-w-[130px]">
                     {activeImage.name}
@@ -530,151 +710,169 @@ export default function BackgroundRemoverPage() {
                 )}
               </div>
 
-              {/* Mode Selection */}
+              {/* Engine Mode Tabs */}
               <div className="space-y-1.5">
                 <Label className="text-[11px] text-[#6b7280] dark:text-[#a1a1aa]">Detection Mode</Label>
-                <div className="grid grid-cols-3 gap-1">
+                <div className="grid grid-cols-2 gap-1.5">
                   {[
-                    { id: "auto", label: "Smart Subject", desc: "People & Products" },
-                    { id: "studio", label: "Studio", desc: "Even Backdrop" },
-                    { id: "graphic", label: "Graphic", desc: "Logos & Art" },
-                  ].map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => setMode(m.id as any)}
-                      className={`py-1.5 px-2 rounded-[4px] border text-left flex flex-col transition-all ${
-                        mode === m.id
-                          ? "border-[#fb6b6a] bg-[#fb6b6a]/10 text-[#fb6b6a]"
-                          : "border-[#e5e7eb] dark:border-[#27272a] text-[#4b5563] dark:text-[#a1a1aa]"
-                      }`}
-                    >
-                      <span className="text-[11px] font-semibold leading-tight">{m.label}</span>
-                      <span className="text-[9px] opacity-75 leading-tight">{m.desc}</span>
-                    </button>
-                  ))}
+                    { id: "ai", label: "AI Neural (Best)", icon: Bot, desc: "Pizza, Products & People" },
+                    { id: "auto", label: "Smart Subject", icon: Zap, desc: "Fast Local Vision" },
+                    { id: "studio", label: "Studio Backdrop", icon: Layers, desc: "Clean / Solid" },
+                    { id: "graphic", label: "Graphic & Logo", icon: Sliders, desc: "Sharp Edges" },
+                  ].map((m) => {
+                    const Icon = m.icon;
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => setMode(m.id as any)}
+                        className={`p-2 rounded-[5px] border text-left flex flex-col transition-all ${
+                          mode === m.id
+                            ? "border-[#fb6b6a] bg-[#fb6b6a]/10 text-[#fb6b6a]"
+                            : "border-[#e5e7eb] dark:border-[#27272a] text-[#4b5563] dark:text-[#a1a1aa] hover:border-[#fb6b6a]/40"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1 font-semibold text-[11px]">
+                          <Icon className="h-3 w-3" />
+                          <span>{m.label}</span>
+                        </div>
+                        <span className="text-[9px] opacity-75 mt-0.5">{m.desc}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-              </div>
-
-              {/* Sensitivity & Tolerance */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-[#6b7280] dark:text-[#a1a1aa]">
-                  <span>Subject Boundary Sensitivity</span>
-                  <span className="font-mono text-[#fb6b6a]">{tolerance}</span>
-                </div>
-                <Slider
-                  value={[tolerance]}
-                  min={10}
-                  max={80}
-                  step={1}
-                  onValueChange={(v) => setTolerance(v[0])}
-                />
-              </div>
-
-              {/* Edge Feathering */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-[#6b7280] dark:text-[#a1a1aa]">
-                  <span>Edge Feather (Softness)</span>
-                  <span className="font-mono text-[#fb6b6a]">{feather}px</span>
-                </div>
-                <Slider
-                  value={[feather]}
-                  min={0}
-                  max={5}
-                  step={1}
-                  onValueChange={(v) => setFeather(v[0])}
-                />
-              </div>
-
-              {/* Cast Shadows Option */}
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-xs text-[#374151] dark:text-[#d1d5db]">
-                  Remove Cast Shadows
-                </span>
-                <input
-                  type="checkbox"
-                  checked={removeShadows}
-                  onChange={(e) => setRemoveShadows(e.target.checked)}
-                  className="rounded border-[#d1d5db] text-[#fb6b6a] focus:ring-[#fb6b6a] cursor-pointer"
-                />
               </div>
 
               {/* Primary Extract Button */}
               <Button
                 onClick={handleRemoveBg}
                 disabled={isProcessing || !activeImage}
-                className="w-full h-9 text-xs font-semibold"
+                className="w-full h-10 text-xs font-semibold bg-[#fb6b6a] hover:bg-[#e05655] text-white shadow-sm"
               >
-                <Wand2 className="h-3.5 w-3.5 mr-1.5" />
-                {isProcessing ? "Analyzing Contours..." : "Extract Object & Remove Background"}
+                <Wand2 className="h-4 w-4 mr-1.5" />
+                {isProcessing ? "Processing Cutout..." : "Extract Object & Remove Background"}
               </Button>
 
-              {/* ── Precision Touch-Up Brushes ── */}
-              {activeImage?.processedCanvas && (
-                <div className="pt-3 border-t border-[#e5e7eb] dark:border-[#27272a] space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-semibold text-[#111827] dark:text-[#f4f4f5] flex items-center gap-1">
-                      <Paintbrush className="h-3.5 w-3.5 text-[#fb6b6a]" />
-                      Touch-Up Brushes
-                    </Label>
+              {/* Fine Tuning Controls */}
+              <div className="space-y-3 pt-2 border-t border-[#e5e7eb] dark:border-[#27272a]">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-[#6b7280] dark:text-[#a1a1aa]">
+                    <span>Sensitivity / Tolerance</span>
+                    <span className="font-mono text-[#fb6b6a]">{tolerance}</span>
+                  </div>
+                  <Slider
+                    value={[tolerance]}
+                    min={10}
+                    max={80}
+                    step={1}
+                    onValueChange={(v) => setTolerance(v[0])}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-[#6b7280] dark:text-[#a1a1aa]">
+                    <span>Edge Softness (Feather)</span>
+                    <span className="font-mono text-[#fb6b6a]">{feather}px</span>
+                  </div>
+                  <Slider
+                    value={[feather]}
+                    min={0}
+                    max={5}
+                    step={1}
+                    onValueChange={(v) => setFeather(v[0])}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs text-[#374151] dark:text-[#d1d5db]">
+                    Remove Cast Shadows
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={removeShadows}
+                    onChange={(e) => setRemoveShadows(e.target.checked)}
+                    className="rounded border-[#d1d5db] text-[#fb6b6a] focus:ring-[#fb6b6a] cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* ── Precision Touch-Up Tools ── */}
+              <div className="pt-3 border-t border-[#e5e7eb] dark:border-[#27272a] space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-[#111827] dark:text-[#f4f4f5] flex items-center gap-1">
+                    <Paintbrush className="h-3.5 w-3.5 text-[#fb6b6a]" />
+                    Interactive Touch-Up
+                  </Label>
+                  {activeImage?.processedCanvas && (
                     <button
                       onClick={handleResetMask}
                       className="text-[10px] text-[#6b7280] hover:text-[#fb6b6a] flex items-center gap-0.5"
                     >
                       <RotateCcw className="h-2.5 w-2.5" />
-                      Reset Edits
+                      Re-run
                     </button>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <Button
-                      variant={brushTool === "none" ? "default" : "outline"}
-                      size="sm"
-                      className="h-7 text-[10px] px-1"
-                      onClick={() => setBrushTool("none")}
-                    >
-                      View
-                    </Button>
-                    <Button
-                      variant={brushTool === "restore" ? "default" : "outline"}
-                      size="sm"
-                      className={`h-7 text-[10px] px-1 ${
-                        brushTool === "restore" ? "bg-[#10b981] hover:bg-[#059669] text-white" : ""
-                      }`}
-                      onClick={() => setBrushTool("restore")}
-                    >
-                      <Paintbrush className="h-3 w-3 mr-1 text-[#10b981]" />
-                      Restore
-                    </Button>
-                    <Button
-                      variant={brushTool === "erase" ? "default" : "outline"}
-                      size="sm"
-                      className={`h-7 text-[10px] px-1 ${
-                        brushTool === "erase" ? "bg-[#ef4444] hover:bg-[#dc2626] text-white" : ""
-                      }`}
-                      onClick={() => setBrushTool("erase")}
-                    >
-                      <Eraser className="h-3 w-3 mr-1 text-[#ef4444]" />
-                      Erase
-                    </Button>
-                  </div>
-
-                  {brushTool !== "none" && (
-                    <div className="space-y-1 pt-1">
-                      <div className="flex justify-between text-[11px] text-[#6b7280] dark:text-[#a1a1aa]">
-                        <span>Brush Size</span>
-                        <span className="font-mono">{brushSize}px</span>
-                      </div>
-                      <Slider
-                        value={[brushSize]}
-                        min={5}
-                        max={80}
-                        step={1}
-                        onValueChange={(v) => setBrushSize(v[0])}
-                      />
-                    </div>
                   )}
                 </div>
-              )}
+
+                <div className="grid grid-cols-4 gap-1">
+                  <Button
+                    variant={activeTool === "none" ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 text-[10px] px-1"
+                    onClick={() => setActiveTool("none")}
+                  >
+                    View
+                  </Button>
+                  <Button
+                    variant={activeTool === "wand" ? "default" : "outline"}
+                    size="sm"
+                    className={`h-7 text-[10px] px-1 ${
+                      activeTool === "wand" ? "bg-[#3b82f6] hover:bg-[#2563eb] text-white" : ""
+                    }`}
+                    onClick={() => setActiveTool("wand")}
+                  >
+                    <MousePointerClick className="h-3 w-3 mr-0.5" />
+                    Wand
+                  </Button>
+                  <Button
+                    variant={activeTool === "restore" ? "default" : "outline"}
+                    size="sm"
+                    className={`h-7 text-[10px] px-1 ${
+                      activeTool === "restore" ? "bg-[#10b981] hover:bg-[#059669] text-white" : ""
+                    }`}
+                    onClick={() => setActiveTool("restore")}
+                  >
+                    <Paintbrush className="h-3 w-3 mr-0.5" />
+                    Keep
+                  </Button>
+                  <Button
+                    variant={activeTool === "erase" ? "default" : "outline"}
+                    size="sm"
+                    className={`h-7 text-[10px] px-1 ${
+                      activeTool === "erase" ? "bg-[#ef4444] hover:bg-[#dc2626] text-white" : ""
+                    }`}
+                    onClick={() => setActiveTool("erase")}
+                  >
+                    <Eraser className="h-3 w-3 mr-0.5" />
+                    Erase
+                  </Button>
+                </div>
+
+                {(activeTool === "restore" || activeTool === "erase") && (
+                  <div className="space-y-1 pt-1">
+                    <div className="flex justify-between text-[11px] text-[#6b7280] dark:text-[#a1a1aa]">
+                      <span>Brush Size</span>
+                      <span className="font-mono">{brushSize}px</span>
+                    </div>
+                    <Slider
+                      value={[brushSize]}
+                      min={5}
+                      max={80}
+                      step={1}
+                      onValueChange={(v) => setBrushSize(v[0])}
+                    />
+                  </div>
+                )}
+              </div>
 
               {/* ── Replace Canvas Backdrop ── */}
               <div className="pt-2 border-t border-[#e5e7eb] dark:border-[#27272a] space-y-1.5">

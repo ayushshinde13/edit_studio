@@ -340,12 +340,14 @@ export function inpaintCanvasRegion(
 
 import {
   removeBackgroundAdvanced,
+  removeBackgroundLocal,
   type RemoveBackgroundOptions,
   type SegmentationResult,
 } from "./backgroundRemoval";
 
 export {
   removeBackgroundAdvanced,
+  removeBackgroundLocal,
   type RemoveBackgroundOptions,
   type SegmentationResult,
 };
@@ -360,7 +362,7 @@ export function removeBackgroundCanvas(
       ? { tolerance: optionsOrTolerance }
       : optionsOrTolerance;
 
-  const result = removeBackgroundAdvanced(sourceCanvas, options);
+  const result = removeBackgroundLocal(sourceCanvas, options);
   return result.cutoutCanvas;
 }
 
