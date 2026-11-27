@@ -63,11 +63,28 @@ interface EditoDB extends DBSchema {
   };
 }
 
+import {
+  SESSION_TOKEN_KEY,
+  ACTIVE_PROJECT_KEY,
+  ACTIVE_TOOL_KEY,
+  initSessionStorage,
+  getActiveProjectId,
+  setActiveProjectId,
+  endSessionAndWipeData,
+} from "./sessionManager";
+
+export {
+  SESSION_TOKEN_KEY,
+  ACTIVE_PROJECT_KEY,
+  ACTIVE_TOOL_KEY,
+  initSessionStorage,
+  getActiveProjectId,
+  setActiveProjectId,
+  endSessionAndWipeData,
+};
+
 const DB_NAME = "edito_studio_db";
 const DB_VERSION = 1;
-
-export const SESSION_TOKEN_KEY = "edito_session_token";
-export const ACTIVE_PROJECT_KEY = "edito_active_project_id";
 
 let dbPromise: Promise<IDBPDatabase<EditoDB>> | null = null;
 
@@ -93,38 +110,6 @@ function getDB(): Promise<IDBPDatabase<EditoDB>> {
 }
 
 /**
- * Initializes the browser session lifecycle:
- * If the user opens the web app in a new tab/session (or after ending the previous session),
- * all old project data is automatically purged from IndexedDB to guarantee complete privacy.
- * During an active session (including page refreshes), the current active project is preserved.
- */
-export async function initSessionStorage(): Promise<void> {
-  if (typeof window === "undefined") return;
-
-  try {
-    const existingSession = sessionStorage.getItem(SESSION_TOKEN_KEY);
-    if (!existingSession) {
-      // Fresh launch or previous session ended: wipe all leftover projects
-      await clearAllProjects();
-      localStorage.removeItem("edito_last_active_project_id");
-      sessionStorage.removeItem(ACTIVE_PROJECT_KEY);
-      const newSessionToken = `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      sessionStorage.setItem(SESSION_TOKEN_KEY, newSessionToken);
-    }
-  } catch (err) {
-    console.warn("Session storage init notice:", err);
-  }
-}
-
-/**
- * Returns the ID of the current project uploaded in this session.
- */
-export function getActiveProjectId(): string | null {
-  if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(ACTIVE_PROJECT_KEY);
-}
-
-/**
  * Saves the current project.
  * Automatically enforces Single Active Project Isolation:
  * Replaces and cleans up any other/older project from IndexedDB so ONLY the user's
@@ -146,12 +131,7 @@ export async function saveProject(project: StoredProject): Promise<void> {
     await tx.store.put(project);
     await tx.done;
 
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
-      if (project.state?.toolId) {
-        sessionStorage.setItem("edito_active_tool_id", project.state.toolId);
-      }
-    }
+    setActiveProjectId(project.id, project.state?.toolId || project.type);
   } catch (err) {
     console.error("Failed to save project to IndexedDB:", err);
   }
@@ -217,18 +197,6 @@ export async function clearAllProjects(): Promise<void> {
     }
   } catch (err) {
     console.error("Failed to clear projects from IndexedDB:", err);
-  }
-}
-
-/**
- * End Session & Wipe All Data:
- * Clears all IndexedDB projects, session storage, and local storage tokens.
- */
-export async function endSessionAndWipeData(): Promise<void> {
-  await clearAllProjects();
-  if (typeof window !== "undefined") {
-    sessionStorage.clear();
-    localStorage.removeItem("edito_last_active_project_id");
   }
 }
 

@@ -15,7 +15,7 @@ import { NavigationBar } from "./navigation-bar";
 import { Footer } from "./footer";
 import { CreateQuickStartModal } from "@/components/CreateQuickStartModal";
 import { cn } from "@/lib/utils";
-import { initSessionStorage } from "@/lib/storage/indexeddb";
+import { initSessionStorage } from "@/lib/storage/sessionManager";
 
 export function ResponsiveShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
