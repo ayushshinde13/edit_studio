@@ -338,32 +338,178 @@ export function inpaintCanvasRegion(
   return resultCanvas;
 }
 
-import {
-  removeBackgroundAdvanced,
-  removeBackgroundLocal,
-  type RemoveBackgroundOptions,
-  type SegmentationResult,
-} from "./backgroundRemoval";
-
-export {
-  removeBackgroundAdvanced,
-  removeBackgroundLocal,
-  type RemoveBackgroundOptions,
-  type SegmentationResult,
-};
-
-// Background Removal via Intelligent Object Saliency & Contour Matting
+// Intelligent Edge-Preserving Background Cutout via Corner-Seeded Flood Fill
 export function removeBackgroundCanvas(
   sourceCanvas: HTMLCanvasElement,
-  optionsOrTolerance: number | RemoveBackgroundOptions = 35
+  tolerance = 35
 ): HTMLCanvasElement {
-  const options: RemoveBackgroundOptions =
-    typeof optionsOrTolerance === "number"
-      ? { tolerance: optionsOrTolerance }
-      : optionsOrTolerance;
+  const width = sourceCanvas.width;
+  const height = sourceCanvas.height;
+  const total = width * height;
 
-  const result = removeBackgroundLocal(sourceCanvas, options);
-  return result.cutoutCanvas;
+  const result = document.createElement("canvas");
+  result.width = width;
+  result.height = height;
+  const ctx = result.getContext("2d")!;
+  ctx.drawImage(sourceCanvas, 0, 0);
+
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const d = imgData.data;
+
+  // 1. Sample 4 outer corners (average 6x6 patch in each corner)
+  const patch = Math.min(8, Math.max(2, Math.floor(Math.min(width, height) / 20)));
+  const corners = [
+    { x0: 0, y0: 0 },
+    { x0: width - patch, y0: 0 },
+    { x0: 0, y0: height - patch },
+    { x0: width - patch, y0: height - patch },
+  ];
+
+  const cornerColors: Array<{ r: number; g: number; b: number }> = [];
+  for (const c of corners) {
+    let rSum = 0, gSum = 0, bSum = 0, count = 0;
+    for (let dy = 0; dy < patch; dy++) {
+      for (let dx = 0; dx < patch; dx++) {
+        const p = ((c.y0 + dy) * width + (c.x0 + dx)) * 4;
+        if (d[p + 3] > 20) {
+          rSum += d[p];
+          gSum += d[p + 1];
+          bSum += d[p + 2];
+          count++;
+        }
+      }
+    }
+    if (count > 0) {
+      cornerColors.push({
+        r: rSum / count,
+        g: gSum / count,
+        b: bSum / count,
+      });
+    }
+  }
+
+  if (cornerColors.length === 0) {
+    cornerColors.push({ r: d[0], g: d[1], b: d[2] });
+  }
+
+  // 2. Compute grayscale luminance for fast gradient/edge detection
+  const lum = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    const p = i * 4;
+    lum[i] = (d[p] * 299 + d[p + 1] * 587 + d[p + 2] * 114) / 1000;
+  }
+
+  // 3. Flood Fill from 4 outer corners
+  // mask: 0 = unvisited (foreground), 1 = background (transparent)
+  const mask = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let qHead = 0;
+  let qTail = 0;
+
+  // Thresholds based on tolerance (default: 35)
+  // colorThresh: max Euclidean color distance to the nearest corner background sample
+  const colorThresh = tolerance * 2.5;
+  // stepThresh: maximum brightness jump between adjacent background pixels (prevents jumping into subject)
+  const stepThresh = Math.max(14, tolerance * 0.75);
+
+  function pushSeed(idx: number) {
+    if (mask[idx] === 0) {
+      mask[idx] = 1;
+      queue[qTail++] = idx;
+    }
+  }
+
+  // Seed 4 corners
+  pushSeed(0);
+  pushSeed(width - 1);
+  pushSeed((height - 1) * width);
+  pushSeed((height - 1) * width + (width - 1));
+
+  // Also seed outer edge margins if their color matches a corner
+  for (let x = 0; x < width; x += 4) {
+    pushSeed(x);
+    pushSeed((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 4) {
+    pushSeed(y * width);
+    pushSeed(y * width + (width - 1));
+  }
+
+  while (qHead < qTail) {
+    const curr = queue[qHead++];
+    const cx = curr % width;
+    const cy = Math.floor(curr / width);
+    const cLum = lum[curr];
+
+    // 4-connected neighbors
+    const neighbors = [
+      cx > 0 ? curr - 1 : -1,
+      cx < width - 1 ? curr + 1 : -1,
+      cy > 0 ? curr - width : -1,
+      cy < height - 1 ? curr + width : -1,
+    ];
+
+    for (let n = 0; n < 4; n++) {
+      const next = neighbors[n];
+      if (next === -1 || mask[next] === 1) continue;
+
+      const np = next * 4;
+      const nLum = lum[next];
+
+      // Stop if sharp edge barrier reached (contour of subject/pizza)
+      if (Math.abs(cLum - nLum) > stepThresh) {
+        continue;
+      }
+
+      // Check distance to nearest corner background color
+      const nr = d[np];
+      const ng = d[np + 1];
+      const nb = d[np + 2];
+
+      let minDist = 999999;
+      for (let c = 0; c < cornerColors.length; c++) {
+        const cc = cornerColors[c];
+        const dist = Math.sqrt(
+          (nr - cc.r) * (nr - cc.r) +
+          (ng - cc.g) * (ng - cc.g) +
+          (nb - cc.b) * (nb - cc.b)
+        );
+        if (dist < minDist) minDist = dist;
+      }
+
+      if (minDist <= colorThresh) {
+        mask[next] = 1; // Mark as background
+        queue[qTail++] = next;
+      }
+    }
+  }
+
+  // 4. Apply transparency to background
+  for (let i = 0; i < total; i++) {
+    if (mask[i] === 1) {
+      d[i * 4 + 3] = 0; // Transparent
+    }
+  }
+
+  // 5. Feather boundary pixels for smooth edges
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+      if (mask[idx] === 0) {
+        if (
+          mask[idx - 1] === 1 ||
+          mask[idx + 1] === 1 ||
+          mask[idx - width] === 1 ||
+          mask[idx + width] === 1
+        ) {
+          d[idx * 4 + 3] = 160; // Soft anti-aliased edge
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return result;
 }
 
 // Creative Filters & Effects
