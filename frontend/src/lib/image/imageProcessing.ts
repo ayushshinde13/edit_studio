@@ -338,7 +338,7 @@ export function inpaintCanvasRegion(
   return resultCanvas;
 }
 
-// Intelligent Edge-Preserving Background Cutout via Corner-Seeded Flood Fill
+// Intelligent Background Cutout with Enclosed Loop & Hole Detection
 export function removeBackgroundCanvas(
   sourceCanvas: HTMLCanvasElement,
   tolerance = 35
@@ -356,8 +356,8 @@ export function removeBackgroundCanvas(
   const imgData = ctx.getImageData(0, 0, width, height);
   const d = imgData.data;
 
-  // 1. Sample 4 outer corners (average 6x6 patch in each corner)
-  const patch = Math.min(8, Math.max(2, Math.floor(Math.min(width, height) / 20)));
+  // 1. Sample 4 outer corners to identify background palette
+  const patch = Math.min(10, Math.max(2, Math.floor(Math.min(width, height) / 15)));
   const corners = [
     { x0: 0, y0: 0 },
     { x0: width - patch, y0: 0 },
@@ -365,7 +365,7 @@ export function removeBackgroundCanvas(
     { x0: width - patch, y0: height - patch },
   ];
 
-  const cornerColors: Array<{ r: number; g: number; b: number }> = [];
+  const cornerColors: Array<{ r: number; g: number; b: number; lum: number }> = [];
   for (const c of corners) {
     let rSum = 0, gSum = 0, bSum = 0, count = 0;
     for (let dy = 0; dy < patch; dy++) {
@@ -380,37 +380,67 @@ export function removeBackgroundCanvas(
       }
     }
     if (count > 0) {
+      const r = rSum / count;
+      const g = gSum / count;
+      const b = bSum / count;
       cornerColors.push({
-        r: rSum / count,
-        g: gSum / count,
-        b: bSum / count,
+        r,
+        g,
+        b,
+        lum: 0.299 * r + 0.587 * g + 0.114 * b,
       });
     }
   }
 
   if (cornerColors.length === 0) {
-    cornerColors.push({ r: d[0], g: d[1], b: d[2] });
+    cornerColors.push({
+      r: d[0],
+      g: d[1],
+      b: d[2],
+      lum: 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2],
+    });
   }
 
-  // 2. Compute grayscale luminance for fast gradient/edge detection
+  let avgBgR = 0, avgBgG = 0, avgBgB = 0;
+  for (const cc of cornerColors) {
+    avgBgR += cc.r;
+    avgBgG += cc.g;
+    avgBgB += cc.b;
+  }
+  avgBgR /= cornerColors.length;
+  avgBgG /= cornerColors.length;
+  avgBgB /= cornerColors.length;
+  const avgBgLum = 0.299 * avgBgR + 0.587 * avgBgG + 0.114 * avgBgB;
+
+  // 2. Compute grayscale luminance
   const lum = new Uint8Array(total);
   for (let i = 0; i < total; i++) {
     const p = i * 4;
-    lum[i] = (d[p] * 299 + d[p + 1] * 587 + d[p + 2] * 114) / 1000;
+    lum[i] = Math.round(0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2]);
   }
 
-  // 3. Flood Fill from 4 outer corners
-  // mask: 0 = unvisited (foreground), 1 = background (transparent)
-  const mask = new Uint8Array(total);
+  // 3. Flood Fill from outer borders
+  const mask = new Uint8Array(total); // 0 = foreground, 1 = background
   const queue = new Int32Array(total);
   let qHead = 0;
   let qTail = 0;
 
-  // Thresholds based on tolerance (default: 35)
-  // colorThresh: max Euclidean color distance to the nearest corner background sample
-  const colorThresh = tolerance * 2.5;
-  // stepThresh: maximum brightness jump between adjacent background pixels (prevents jumping into subject)
-  const stepThresh = Math.max(14, tolerance * 0.75);
+  function getMinCornerDist(r: number, g: number, b: number): number {
+    let minD = 999999;
+    for (let c = 0; c < cornerColors.length; c++) {
+      const cc = cornerColors[c];
+      const dr = r - cc.r;
+      const dg = g - cc.g;
+      const db = b - cc.b;
+      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+      if (dist < minD) minD = dist;
+    }
+    return minD;
+  }
+
+  // Sensitivity thresholds
+  const colorThresh = tolerance * 2.8;
+  const stepThresh = Math.max(16, tolerance * 0.9);
 
   function pushSeed(idx: number) {
     if (mask[idx] === 0) {
@@ -419,18 +449,12 @@ export function removeBackgroundCanvas(
     }
   }
 
-  // Seed 4 corners
-  pushSeed(0);
-  pushSeed(width - 1);
-  pushSeed((height - 1) * width);
-  pushSeed((height - 1) * width + (width - 1));
-
-  // Also seed outer edge margins if their color matches a corner
-  for (let x = 0; x < width; x += 4) {
+  // Seed outer perimeter borders
+  for (let x = 0; x < width; x += 2) {
     pushSeed(x);
     pushSeed((height - 1) * width + x);
   }
-  for (let y = 0; y < height; y += 4) {
+  for (let y = 0; y < height; y += 2) {
     pushSeed(y * width);
     pushSeed(y * width + (width - 1));
   }
@@ -441,7 +465,6 @@ export function removeBackgroundCanvas(
     const cy = Math.floor(curr / width);
     const cLum = lum[curr];
 
-    // 4-connected neighbors
     const neighbors = [
       cx > 0 ? curr - 1 : -1,
       cx < width - 1 ? curr + 1 : -1,
@@ -451,58 +474,80 @@ export function removeBackgroundCanvas(
 
     for (let n = 0; n < 4; n++) {
       const next = neighbors[n];
-      if (next === -1 || mask[next] === 1) continue;
+      if (next === -1 || mask[next] !== 0) continue;
 
       const np = next * 4;
       const nLum = lum[next];
 
-      // Stop if sharp edge barrier reached (contour of subject/pizza)
+      // Stop at sharp contrast edge
       if (Math.abs(cLum - nLum) > stepThresh) {
         continue;
       }
 
-      // Check distance to nearest corner background color
       const nr = d[np];
       const ng = d[np + 1];
       const nb = d[np + 2];
 
-      let minDist = 999999;
-      for (let c = 0; c < cornerColors.length; c++) {
-        const cc = cornerColors[c];
-        const dist = Math.sqrt(
-          (nr - cc.r) * (nr - cc.r) +
-          (ng - cc.g) * (ng - cc.g) +
-          (nb - cc.b) * (nb - cc.b)
-        );
-        if (dist < minDist) minDist = dist;
-      }
-
-      if (minDist <= colorThresh) {
-        mask[next] = 1; // Mark as background
+      if (getMinCornerDist(nr, ng, nb) <= colorThresh) {
+        mask[next] = 1;
         queue[qTail++] = next;
       }
     }
   }
 
-  // 4. Apply transparency to background
+  // 4. Enclosed Loop & Hole Background Detection
+  // (Removes background trapped inside signature letters like 'A', 'k', 's', 'o', loops, handles)
+  const isLightBg = avgBgLum > 130;
+  const holeColorThresh = colorThresh * 1.2;
+
   for (let i = 0; i < total; i++) {
-    if (mask[i] === 1) {
-      d[i * 4 + 3] = 0; // Transparent
+    if (mask[i] === 0) {
+      const p = i * 4;
+      const r = d[p];
+      const g = d[p + 1];
+      const b = d[p + 2];
+      const pixelLum = lum[i];
+      const dist = getMinCornerDist(r, g, b);
+
+      if (isLightBg) {
+        // Light paper / background: if pixel is light and matches background color, remove it
+        if (dist <= holeColorThresh && pixelLum > avgBgLum - colorThresh * 0.9) {
+          mask[i] = 1;
+        }
+      } else {
+        // Dark / colored background
+        if (dist <= colorThresh * 0.9) {
+          mask[i] = 1;
+        }
+      }
     }
   }
 
-  // 5. Feather boundary pixels for smooth edges
+  // 5. Apply transparency to background
+  for (let i = 0; i < total; i++) {
+    if (mask[i] === 1) {
+      d[i * 4 + 3] = 0;
+    }
+  }
+
+  // 6. Anti-Aliased Edge Feathering
+  // Soften boundary pixels directly on the contour for clean, smooth borders
   for (let y = 1; y < height - 1; y++) {
+    const row = y * width;
     for (let x = 1; x < width - 1; x++) {
-      const idx = y * width + x;
+      const idx = row + x;
       if (mask[idx] === 0) {
-        if (
+        const hasBgNeighbor =
           mask[idx - 1] === 1 ||
           mask[idx + 1] === 1 ||
           mask[idx - width] === 1 ||
-          mask[idx + width] === 1
-        ) {
-          d[idx * 4 + 3] = 160; // Soft anti-aliased edge
+          mask[idx + width] === 1;
+
+        if (hasBgNeighbor) {
+          const p = idx * 4;
+          const dist = getMinCornerDist(d[p], d[p + 1], d[p + 2]);
+          const edgeAlpha = Math.min(255, Math.max(90, Math.round((dist / (colorThresh * 1.5)) * 255)));
+          d[p + 3] = edgeAlpha;
         }
       }
     }

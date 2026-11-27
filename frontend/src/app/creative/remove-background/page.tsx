@@ -167,6 +167,17 @@ export default function BackgroundRemoverPage() {
     }
   }, [activeImage, tolerance, bgColor, drawToCanvas]);
 
+  // ── Auto update when tolerance slider changes if already processed ───────
+  const hasProcessed = !!activeImage?.processedCanvas;
+  React.useEffect(() => {
+    if (hasProcessed && activeImage) {
+      const timer = setTimeout(() => {
+        handleRemoveBg();
+      }, 120);
+      return () => clearTimeout(timer);
+    }
+  }, [tolerance, hasProcessed]);
+
   // ── Re-render on backdrop or original view toggle ───────────────────────
   React.useEffect(() => {
     if (activeImage) {
