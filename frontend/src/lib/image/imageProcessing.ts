@@ -338,38 +338,30 @@ export function inpaintCanvasRegion(
   return resultCanvas;
 }
 
-// Background Removal via Edge Cutout & Threshold Matting
+import {
+  removeBackgroundAdvanced,
+  type RemoveBackgroundOptions,
+  type SegmentationResult,
+} from "./backgroundRemoval";
+
+export {
+  removeBackgroundAdvanced,
+  type RemoveBackgroundOptions,
+  type SegmentationResult,
+};
+
+// Background Removal via Intelligent Object Saliency & Contour Matting
 export function removeBackgroundCanvas(
   sourceCanvas: HTMLCanvasElement,
-  tolerance = 30
+  optionsOrTolerance: number | RemoveBackgroundOptions = 35
 ): HTMLCanvasElement {
-  const width = sourceCanvas.width;
-  const height = sourceCanvas.height;
-  const result = document.createElement("canvas");
-  result.width = width;
-  result.height = height;
-  const ctx = result.getContext("2d")!;
-  ctx.drawImage(sourceCanvas, 0, 0);
+  const options: RemoveBackgroundOptions =
+    typeof optionsOrTolerance === "number"
+      ? { tolerance: optionsOrTolerance }
+      : optionsOrTolerance;
 
-  const imgData = ctx.getImageData(0, 0, width, height);
-  const d = imgData.data;
-
-  // Sample corner background color
-  const bgR = (d[0] + d[(width - 1) * 4]) / 2;
-  const bgG = (d[1] + d[(width - 1) * 4 + 1]) / 2;
-  const bgB = (d[2] + d[(width - 1) * 4 + 2]) / 2;
-
-  for (let i = 0; i < d.length; i += 4) {
-    const diff = Math.sqrt(
-      Math.pow(d[i] - bgR, 2) + Math.pow(d[i + 1] - bgG, 2) + Math.pow(d[i + 2] - bgB, 2)
-    );
-    if (diff < tolerance * 2) {
-      d[i + 3] = 0; // Transparent
-    }
-  }
-
-  ctx.putImageData(imgData, 0, 0);
-  return result;
+  const result = removeBackgroundAdvanced(sourceCanvas, options);
+  return result.cutoutCanvas;
 }
 
 // Creative Filters & Effects

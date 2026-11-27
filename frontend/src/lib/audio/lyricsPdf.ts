@@ -1,4 +1,23 @@
-import { jsPDF } from "jspdf";
+// Dynamic jsPDF loader to prevent build breaks when jspdf is not pre-installed
+async function loadJsPdf(): Promise<any> {
+  if (typeof window === "undefined") return null;
+  if ((window as any).jspdf?.jsPDF) return (window as any).jspdf.jsPDF;
+  if ((window as any).jsPDF) return (window as any).jsPDF;
+
+  return new Promise((resolve) => {
+    const existing = document.querySelector('script[src*="jspdf"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve((window as any).jspdf?.jsPDF || (window as any).jsPDF || null));
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    script.async = true;
+    script.onload = () => resolve((window as any).jspdf?.jsPDF || (window as any).jsPDF || null);
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+}
 
 export interface ExportLyricsPdfOptions {
   title?: string;
@@ -25,11 +44,14 @@ export async function downloadLyricsPdf({
   }
 
   const cleanTitle = (title || "Song Lyrics").replace(/\.[^/.]+$/, "").trim();
-  const pdf = new jsPDF({
-    orientation: "portrait",
-    unit: "mm",
-    format: "a4",
-  });
+  const JsPdfClass = await loadJsPdf();
+  const pdf = JsPdfClass
+    ? new JsPdfClass({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      })
+    : null;
 
   const pageWidthMm = 210;
   const pageHeightMm = 297;
@@ -231,17 +253,23 @@ export async function downloadLyricsPdf({
     const pageMetrics = ctx.measureText(pageStr);
     ctx.fillText(pageStr, canvasWidth - marginX - pageMetrics.width, footerY);
 
-    // Add page to jsPDF
-    if (pageIdx > 0) {
-      pdf.addPage("a4", "portrait");
-    }
-
+    // Add page to jsPDF if available
     const imgData = canvas.toDataURL("image/jpeg", 0.95);
-    pdf.addImage(imgData, "JPEG", 0, 0, pageWidthMm, pageHeightMm);
+    if (pdf) {
+      if (pageIdx > 0) {
+        pdf.addPage("a4", "portrait");
+      }
+      pdf.addImage(imgData, "JPEG", 0, 0, pageWidthMm, pageHeightMm);
+    }
   }
 
   // Save the PDF file
   const safeFilename = cleanTitle.replace(/[^a-zA-Z0-9\s-_]/g, "").trim() || "song_lyrics";
-  pdf.save(`${safeFilename}_lyrics.pdf`);
+  if (pdf) {
+    pdf.save(`${safeFilename}_lyrics.pdf`);
+  } else {
+    // Graceful fallback: trigger native print / download
+    window.print();
+  }
   return true;
 }
